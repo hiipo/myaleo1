@@ -30,6 +30,7 @@ members = [
   "polycommit",
   "posw",
   "profiler",
+  "programs",
   "r1cs",
   "utilities",
   "wasm",

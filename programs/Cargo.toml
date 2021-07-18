@@ -1,0 +1,11 @@
+[package]
+name = "snarkvm-programs"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies.snarkvm-dpc]
+path = "../dpc"
+version = "0.7.4"
+
+[dependencies.anyhow]
+version = "1.0"

@@ -1864,6 +1864,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "snarkvm-programs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "snarkvm-dpc",
+]
+
+[[package]]
 name = "snarkvm-r1cs"
 version = "0.7.4"
 dependencies = [
