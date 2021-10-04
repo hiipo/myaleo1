@@ -39,13 +39,15 @@ pub struct CircuitProvingKey<F: PrimeField, CF: PrimeField, PC: PolynomialCommit
 
 impl<F: PrimeField, CF: PrimeField, PC: PolynomialCommitment<F, CF>> ToBytes for CircuitProvingKey<F, CF, PC> {
     fn write_le<W: Write>(&self, mut writer: W) -> IoResult<()> {
-        CanonicalSerialize::serialize(self, &mut writer).map_err(|_| error("could not serialize CircuitProvingKey"))
+        CanonicalSerialize::serialize_uncompressed(self, &mut writer)
+            .map_err(|_| error("could not serialize CircuitProvingKey"))
     }
 }
 
 impl<F: PrimeField, CF: PrimeField, PC: PolynomialCommitment<F, CF>> FromBytes for CircuitProvingKey<F, CF, PC> {
     #[inline]
     fn read_le<R: Read>(mut reader: R) -> IoResult<Self> {
-        CanonicalDeserialize::deserialize(&mut reader).map_err(|_| error("could not deserialize CircuitProvingKey"))
+        CanonicalDeserialize::deserialize_uncompressed(&mut reader)
+            .map_err(|_| error("could not deserialize CircuitProvingKey"))
     }
 }
