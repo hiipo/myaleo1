@@ -28,19 +28,27 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             unimplemented!("unsupported instruction in evaluate_array_slice_get");
         };
 
-        let array = self.resolve(values.get(0).unwrap(), cs.ns(|| "evaluate array slice get array"))?.into_owned();
+        let array = self
+            .resolve(values.get(0).unwrap(), cs.ns(|| "evaluate array slice get array"))?
+            .into_owned();
         let array = array
             .extract_array()
             .map_err(|value| anyhow!("illegal value for array slice: {}", value))?;
-        let from = self.resolve(values.get(1).unwrap(), cs.ns(|| "evaluate array slice get from"))?.into_owned();
+        let from = self
+            .resolve(values.get(1).unwrap(), cs.ns(|| "evaluate array slice get from"))?
+            .into_owned();
         let from_resolved = from
             .extract_integer()
             .map_err(|value| anyhow!("invalid value for array slice from index: {}", value))?;
-        let to = self.resolve(values.get(2).unwrap(), cs.ns(|| "evaluate array slice get to"))?.into_owned();
+        let to = self
+            .resolve(values.get(2).unwrap(), cs.ns(|| "evaluate array slice get to"))?
+            .into_owned();
         let to_resolved = to
             .extract_integer()
             .map_err(|value| anyhow!("invalid value for array slice to index: {}", value))?;
-        let length = self.resolve(values.get(3).unwrap(), cs.ns(|| "evaluate array slice get length"))?.into_owned();
+        let length = self
+            .resolve(values.get(3).unwrap(), cs.ns(|| "evaluate array slice get length"))?
+            .into_owned();
         let length = length
             .extract_integer()
             .map_err(|value| anyhow!("invalid value for array slice length: {}", value))?
@@ -80,7 +88,10 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                     _ => unimplemented!("illegal non-Integer returned from sub"),
                 };
                 calc_len
-                    .enforce_equal(cs.ns(|| "evaluate array range access length check"), &Integer::new(&IrInteger::U32(length as u32)))
+                    .enforce_equal(
+                        cs.ns(|| "evaluate array range access length check"),
+                        &Integer::new(&IrInteger::U32(length as u32)),
+                    )
                     .map_err(|e| ValueError::cannot_enforce("array length check", e))?;
             }
             {
@@ -114,8 +125,13 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                     _ => unimplemented!("unexpected non-Boolean for evaluate_eq"),
                 };
 
-                result = ConstrainedValue::conditionally_select(cs.ns(|| format!("array index {}", i)), &equality, &array_value, &result)
-                    .map_err(|e| ValueError::cannot_enforce("conditional select", e))?;
+                result = ConstrainedValue::conditionally_select(
+                    cs.ns(|| format!("array index {}", i)),
+                    &equality,
+                    &array_value,
+                    &result,
+                )
+                .map_err(|e| ValueError::cannot_enforce("conditional select", e))?;
             }
             result
         };

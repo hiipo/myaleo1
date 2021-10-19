@@ -65,7 +65,9 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
         data: &QueryData<2>,
         mut cs: CS,
     ) -> Result<(ConstrainedValue<F, G>, ConstrainedValue<F, G>)> {
-        let left = self.resolve(data.values.get(0).unwrap(), cs.ns(|| "resolve binary left"))?.into_owned();
+        let left = self
+            .resolve(data.values.get(0).unwrap(), cs.ns(|| "resolve binary left"))?
+            .into_owned();
         let right = self.resolve(data.values.get(1).unwrap(), cs)?.into_owned();
         Ok((left, right))
     }
@@ -155,7 +157,9 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                 self.store(*destination, out);
             }
             Instruction::Negate(QueryData { destination, values }) => {
-                let inner = self.resolve(values.get(0).unwrap(), cs.ns(|| "evaluate instruction negate"))?.into_owned();
+                let inner = self
+                    .resolve(values.get(0).unwrap(), cs.ns(|| "evaluate instruction negate"))?
+                    .into_owned();
                 let out = operations::enforce_negate(self.cs(&mut cs), inner)?;
                 self.store(*destination, out);
             }
@@ -173,7 +177,9 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             Instruction::ArrayInit(VarData { destination, values }) => {
                 let mut inner = Vec::with_capacity(values.len());
                 for value in values {
-                    let value = self.resolve(value, cs.ns(|| "evaluate instruction array init"))?.into_owned();
+                    let value = self
+                        .resolve(value, cs.ns(|| "evaluate instruction array init"))?
+                        .into_owned();
                     match value {
                         ConstrainedValue::Array(values) => {
                             for value in values {
@@ -204,7 +210,10 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             Instruction::TupleInit(VarData { destination, values }) => {
                 let mut inner = Vec::with_capacity(values.len());
                 for value in values {
-                    inner.push(self.resolve(value, cs.ns(|| "evaluate instruction tuple init"))?.into_owned());
+                    inner.push(
+                        self.resolve(value, cs.ns(|| "evaluate instruction tuple init"))?
+                            .into_owned(),
+                    );
                 }
                 let array = ConstrainedValue::Tuple(inner);
                 self.store(*destination, array);
@@ -237,13 +246,21 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             }
             Instruction::TupleIndexStore(QueryData { destination, values }) => {
                 let index = self
-                    .resolve(values.get(0).unwrap(), cs.ns(|| "evaluate instruction tuple index store index"))?
+                    .resolve(
+                        values.get(0).unwrap(),
+                        cs.ns(|| "evaluate instruction tuple index store index"),
+                    )?
                     .extract_integer()
                     .map_err(|value| anyhow!("invalid index type for tuple store: {}", value))?
                     .to_usize()
                     .ok_or_else(|| anyhow!("illegal variable input for tuple store"))?;
 
-                let tuple = self.resolve(&Value::Ref(*destination), cs.ns(|| "evaluate instruction tuple index store tuple"))?.into_owned();
+                let tuple = self
+                    .resolve(
+                        &Value::Ref(*destination),
+                        cs.ns(|| "evaluate instruction tuple index store tuple"),
+                    )?
+                    .into_owned();
                 let mut tuple = tuple
                     .extract_tuple()
                     .map_err(|value| anyhow!("invalid tuple type for tuple store: {}", value))?
@@ -262,12 +279,18 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                 self.store(*destination, ConstrainedValue::Tuple(tuple));
             }
             Instruction::Pick(QueryData { destination, values }) => {
-                let condition = self.resolve(values.get(0).unwrap(), cs.ns(|| "evaluate instruction pick condition"))?.into_owned();
+                let condition = self
+                    .resolve(values.get(0).unwrap(), cs.ns(|| "evaluate instruction pick condition"))?
+                    .into_owned();
                 let condition = condition
                     .extract_bool()
                     .map_err(|value| anyhow!("invalid value for pick condition: {}", value))?;
-                let left = self.resolve(values.get(1).unwrap(), cs.ns(|| "evaluate instruction pick left"))?.into_owned();
-                let right = self.resolve(values.get(2).unwrap(), cs.ns(|| "evaluate instruction pick right"))?.into_owned();
+                let left = self
+                    .resolve(values.get(1).unwrap(), cs.ns(|| "evaluate instruction pick left"))?
+                    .into_owned();
+                let right = self
+                    .resolve(values.get(2).unwrap(), cs.ns(|| "evaluate instruction pick right"))?
+                    .into_owned();
                 let picked = ConstrainedValue::conditionally_select(self.cs(&mut cs), &condition, &left, &right)?;
                 self.store(*destination, picked);
             }
@@ -328,7 +351,10 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             }) => {
                 let arguments = arguments
                     .iter()
-                    .map(|x| self.resolve(x, cs.ns(|| "evaluate instruction call core")).map(Cow::into_owned))
+                    .map(|x| {
+                        self.resolve(x, cs.ns(|| "evaluate instruction call core"))
+                            .map(Cow::into_owned)
+                    })
                     .collect::<Result<Vec<_>>>()?;
 
                 let out = self.call_core(&**identifier, &arguments, cs)?;

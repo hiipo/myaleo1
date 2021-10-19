@@ -29,19 +29,27 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             unimplemented!("unsupported instruction in evaluate_array_slice_get");
         };
 
-        let array = self.resolve(&Value::Ref(*destination), cs.ns(|| "evaluate array slice store array"))?.into_owned();
+        let array = self
+            .resolve(&Value::Ref(*destination), cs.ns(|| "evaluate array slice store array"))?
+            .into_owned();
         let array = array
             .extract_array()
             .map_err(|value| anyhow!("illegal target for array slice store: {}", value))?;
-        let from = self.resolve(values.get(0).unwrap(), cs.ns(|| "evaluate array slice store from"))?.into_owned();
+        let from = self
+            .resolve(values.get(0).unwrap(), cs.ns(|| "evaluate array slice store from"))?
+            .into_owned();
         let from_resolved = from
             .extract_integer()
             .map_err(|value| anyhow!("invalid value for array slice store from index: {}", value))?;
-        let to = self.resolve(values.get(1).unwrap(), cs.ns(|| "evaluate array slice store to"))?.into_owned();
+        let to = self
+            .resolve(values.get(1).unwrap(), cs.ns(|| "evaluate array slice store to"))?
+            .into_owned();
         let to_resolved = to
             .extract_integer()
             .map_err(|value| anyhow!("invalid value for array slice store to index: {}", value))?;
-        let target = self.resolve(values.get(2).unwrap(), cs.ns(|| "evaluate array slice store target"))?.into_owned();
+        let target = self
+            .resolve(values.get(2).unwrap(), cs.ns(|| "evaluate array slice store target"))?
+            .into_owned();
         let target_values = target
             .extract_array()
             .map_err(|value| anyhow!("illegal value for array slice store: {}", value))?;

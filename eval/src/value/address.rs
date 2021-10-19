@@ -138,8 +138,7 @@ impl<F: PrimeField> EvaluateEqGadget<F> for Address {
             let mut result = Boolean::constant(true);
 
             for (i, (a, b)) in self.bytes.iter().zip(&other.bytes).enumerate() {
-                let equal =
-                    a.evaluate_equal(cs.ns(|| format!("address evaluate equality for {}-th byte", i)), b)?;
+                let equal = a.evaluate_equal(cs.ns(|| format!("address evaluate equality for {}-th byte", i)), b)?;
 
                 result = Boolean::and(
                     cs.ns(|| format!("address and result for {}-th byte", i)),
@@ -227,8 +226,7 @@ impl<F: PrimeField> CondSelectGadget<F> for Address {
                 .zip(&second.bytes)
                 .enumerate()
                 .map(|(i, (a, b))| {
-                    UInt8::conditionally_select(cs.ns(|| format!("address_cond_select_{}", i)), cond, a, b)
-                        .unwrap()
+                    UInt8::conditionally_select(cs.ns(|| format!("address_cond_select_{}", i)), cond, a, b).unwrap()
                 })
                 .collect::<Vec<UInt8>>();
 

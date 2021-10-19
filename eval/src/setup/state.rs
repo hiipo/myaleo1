@@ -78,7 +78,12 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
         let arguments = data
             .arguments
             .iter()
-            .map(|x| self.state_data.state.resolve(x, cs.ns(|| "setup call arguments")).map(|x| x.into_owned()))
+            .map(|x| {
+                self.state_data
+                    .state
+                    .resolve(x, cs.ns(|| "setup call arguments"))
+                    .map(|x| x.into_owned())
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         self.namespace_id_counter += 1;
@@ -191,7 +196,9 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
             {
                 let prior = prior.clone(); //todo: optimize away clone
                 let value = ConstrainedValue::conditionally_select(
-                    self.state_data.state.cs_meta(&*format!("selection {}", variable), &mut cs),
+                    self.state_data
+                        .state
+                        .cs_meta(&*format!("selection {}", variable), &mut cs),
                     &condition,
                     &value,
                     &prior,
@@ -227,7 +234,11 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
             return Err(anyhow!("illegal repeat block length"));
         }
 
-        let from = self.state_data.state.resolve(&data.from, cs.ns(|| "setup repeat from"))?.into_owned();
+        let from = self
+            .state_data
+            .state
+            .resolve(&data.from, cs.ns(|| "setup repeat from"))?
+            .into_owned();
         let from_int = from
             .extract_integer()
             .map_err(|value| anyhow!("illegal type for loop init: {}", value))?
@@ -356,7 +367,10 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
             state_data: StateData::create_initial_state_data(state, function, Rc::new(Vec::new()), index)?,
         };
         loop {
-            match evaluator.state_data.evaluate_block(cs.ns(|| "evaluate function evaluate block")) {
+            match evaluator
+                .state_data
+                .evaluate_block(cs.ns(|| "evaluate function evaluate block"))
+            {
                 Ok(Some(Instruction::Call(data))) => {
                     evaluator.setup_call(data, cs.ns(|| "evaluate function setup call"))?;
                 }
@@ -572,9 +586,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             Type::Field => FieldType::from_input(cs.ns(|| name.to_string()), name, value)?,
             Type::Char => Char::from_input(cs.ns(|| name.to_string()), name, value)?,
             Type::Group => match value {
-                Value::Group(g) => {
-                    ConstrainedValue::Group(G::constant(&g)?.to_allocated(cs.ns(|| name.to_string()))?)
-                }
+                Value::Group(g) => ConstrainedValue::Group(G::constant(&g)?.to_allocated(cs.ns(|| name.to_string()))?),
                 _ => {
                     return Err(
                         GroupError::invalid_group("expected group, didn't find group in input".to_string()).into(),
@@ -701,7 +713,12 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                     ir_input.type_
                 ));
             }
-            let value = Self::allocate_input(cs.ns(|| format!("input {}", name)), &ir_input.type_, &*ir_input.name, value.clone())?;
+            let value = Self::allocate_input(
+                cs.ns(|| format!("input {}", name)),
+                &ir_input.type_,
+                &*ir_input.name,
+                value.clone(),
+            )?;
             self.variables.insert(ir_input.variable, value);
         }
         Ok(())

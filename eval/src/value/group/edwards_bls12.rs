@@ -412,8 +412,14 @@ impl ConditionalEqGadget<Fq> for EdwardsGroupType {
             // c - a = a - c
             (EdwardsGroupType::Constant(constant_value), EdwardsGroupType::Allocated(allocated_value))
             | (EdwardsGroupType::Allocated(allocated_value), EdwardsGroupType::Constant(constant_value)) => {
-                let x = FpGadget::from(AllocatedFp::from(cs.ns(|| "conditional enforce equal x"), &constant_value.x));
-                let y = FpGadget::from(AllocatedFp::from(cs.ns(|| "conditional enforce equal y"), &constant_value.y));
+                let x = FpGadget::from(AllocatedFp::from(
+                    cs.ns(|| "conditional enforce equal x"),
+                    &constant_value.x,
+                ));
+                let y = FpGadget::from(AllocatedFp::from(
+                    cs.ns(|| "conditional enforce equal y"),
+                    &constant_value.y,
+                ));
                 let constant_gadget = EdwardsBls12Gadget::new(x, y);
 
                 constant_gadget.conditional_enforce_equal(cs, allocated_value, condition)

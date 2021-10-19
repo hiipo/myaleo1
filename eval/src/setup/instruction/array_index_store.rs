@@ -31,9 +31,15 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
 
         //todo: optimize array copies here
 
-        let index = self.resolve(values.get(0).unwrap(), cs.ns(|| "evaluate array index store index"))?.into_owned();
-        let target = self.resolve(values.get(1).unwrap(), cs.ns(|| "evaluate array index store target"))?.into_owned();
-        let array = self.resolve(&Value::Ref(*destination), cs.ns(|| "evaluate array index store array"))?.into_owned();
+        let index = self
+            .resolve(values.get(0).unwrap(), cs.ns(|| "evaluate array index store index"))?
+            .into_owned();
+        let target = self
+            .resolve(values.get(1).unwrap(), cs.ns(|| "evaluate array index store target"))?
+            .into_owned();
+        let array = self
+            .resolve(&Value::Ref(*destination), cs.ns(|| "evaluate array index store array"))?
+            .into_owned();
 
         let index_resolved = index
             .extract_integer()
@@ -58,7 +64,11 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                     .len()
                     .try_into()
                     .map_err(|_| ArrayError::array_length_out_of_bounds())?;
-                Self::array_bounds_check(cs.ns(|| "evaluate array index store array bounds check"), index_resolved, array_len)?;
+                Self::array_bounds_check(
+                    cs.ns(|| "evaluate array index store array bounds check"),
+                    index_resolved,
+                    array_len,
+                )?;
             }
 
             let array = array.clone();
@@ -85,8 +95,13 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                     .evaluate_equal(cs.ns(|| namespace_string), &i)
                     .map_err(|e| ValueError::cannot_enforce("==", e))?;
 
-                let value = ConstrainedValue::conditionally_select(cs.ns(|| format!("select array dyn assignment {}", i)), &index_comparison, &target, &item)
-                    .map_err(|e| ValueError::cannot_enforce("conditional select", e))?;
+                let value = ConstrainedValue::conditionally_select(
+                    cs.ns(|| format!("select array dyn assignment {}", i)),
+                    &index_comparison,
+                    &target,
+                    &item,
+                )
+                .map_err(|e| ValueError::cannot_enforce("conditional select", e))?;
                 out.push(value);
             }
             ConstrainedValue::Array(out)

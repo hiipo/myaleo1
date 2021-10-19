@@ -61,8 +61,17 @@ impl<F: PrimeField, G: GroupType<F>, CS: ConstraintSystem<F>> Evaluator<F, G> fo
     fn evaluate(&mut self, program: &Program, input: &InputData) -> Result<Self::Output, Self::Error> {
         let mut state = EvaluatorState::new(program);
 
-        state.handle_input_block("main", &program.header.main_inputs, &input.main, self.cs.ns(|| "evaluate handle_input_block main"))?;
-        state.handle_const_input_block(&program.header.constant_inputs, &input.constants, self.cs.ns(|| "evaluate handle_const_input_block"))?;
+        state.handle_input_block(
+            "main",
+            &program.header.main_inputs,
+            &input.main,
+            self.cs.ns(|| "evaluate handle_input_block main"),
+        )?;
+        state.handle_const_input_block(
+            &program.header.constant_inputs,
+            &input.constants,
+            self.cs.ns(|| "evaluate handle_const_input_block"),
+        )?;
         state.handle_input_block(
             "register",
             &program.header.register_inputs,
@@ -88,7 +97,8 @@ impl<F: PrimeField, G: GroupType<F>, CS: ConstraintSystem<F>> Evaluator<F, G> fo
             self.cs.ns(|| "evaluate handle_input_block private_leaf_states"),
         )?;
         let function = state.setup_evaluate_function(0, &[])?;
-        let output = FunctionEvaluator::evaluate_function(function, state, 0, self.cs.ns(|| "evaluate evaluate_function"))?; // arguments assigned via input system for entrypoint
+        let output =
+            FunctionEvaluator::evaluate_function(function, state, 0, self.cs.ns(|| "evaluate evaluate_function"))?; // arguments assigned via input system for entrypoint
         Ok(output)
     }
 }
