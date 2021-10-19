@@ -47,7 +47,7 @@ impl<F: PrimeField> Char<F> {
     }
 
     pub(crate) fn from_input<G: GroupType<F>, CS: ConstraintSystem<F>>(
-        cs: &mut CS,
+        cs: CS,
         name: &str,
         value: Value,
     ) -> Result<ConstrainedValue<F, G>, CharError> {

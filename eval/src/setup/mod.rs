@@ -61,34 +61,34 @@ impl<F: PrimeField, G: GroupType<F>, CS: ConstraintSystem<F>> Evaluator<F, G> fo
     fn evaluate(&mut self, program: &Program, input: &InputData) -> Result<Self::Output, Self::Error> {
         let mut state = EvaluatorState::new(program);
 
-        state.handle_input_block("main", &program.header.main_inputs, &input.main, &mut self.cs)?;
-        state.handle_const_input_block(&program.header.constant_inputs, &input.constants, &mut self.cs)?;
+        state.handle_input_block("main", &program.header.main_inputs, &input.main, self.cs.ns(|| "evaluate handle_input_block main"))?;
+        state.handle_const_input_block(&program.header.constant_inputs, &input.constants, self.cs.ns(|| "evaluate handle_const_input_block"))?;
         state.handle_input_block(
             "register",
             &program.header.register_inputs,
             &input.registers,
-            &mut self.cs,
+            self.cs.ns(|| "evaluate handle_input_block register"),
         )?;
         state.handle_input_block(
             "public_states",
             &program.header.public_states,
             &input.public_states,
-            &mut self.cs,
+            self.cs.ns(|| "evaluate handle_input_block public_states"),
         )?;
         state.handle_input_block(
             "private_record_states",
             &program.header.private_record_states,
             &input.private_record_states,
-            &mut self.cs,
+            self.cs.ns(|| "evaluate handle_input_block private_record_states"),
         )?;
         state.handle_input_block(
             "private_leaf_states",
             &program.header.private_leaf_states,
             &input.private_leaf_states,
-            &mut self.cs,
+            self.cs.ns(|| "evaluate handle_input_block private_leaf_states"),
         )?;
         let function = state.setup_evaluate_function(0, &[])?;
-        let output = FunctionEvaluator::evaluate_function(function, state, 0, &mut self.cs)?; // arguments assigned via input system for entrypoint
+        let output = FunctionEvaluator::evaluate_function(function, state, 0, self.cs.ns(|| "evaluate evaluate_function"))?; // arguments assigned via input system for entrypoint
         Ok(output)
     }
 }

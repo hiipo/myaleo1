@@ -22,7 +22,7 @@ use snarkvm_r1cs::ConstraintSystem;
 use crate::{errors::BooleanError, ConstrainedValue, GroupType};
 
 pub(crate) fn allocate_bool<F: PrimeField, CS: ConstraintSystem<F>>(
-    cs: &mut CS,
+    mut cs: CS,
     name: &str,
     option: bool,
 ) -> Result<Boolean, BooleanError> {
@@ -31,7 +31,7 @@ pub(crate) fn allocate_bool<F: PrimeField, CS: ConstraintSystem<F>>(
 }
 
 pub(crate) fn bool_from_input<F: PrimeField, G: GroupType<F>, CS: ConstraintSystem<F>>(
-    cs: &mut CS,
+    cs: CS,
     name: &str,
     value: Value,
 ) -> Result<ConstrainedValue<F, G>, BooleanError> {

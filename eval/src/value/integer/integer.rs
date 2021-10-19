@@ -168,7 +168,7 @@ impl Integer {
     }
 
     pub fn allocate_type<F: Field, CS: ConstraintSystem<F>>(
-        cs: &mut CS,
+        mut cs: CS,
         name: &str,
         value: snarkvm_ir::Integer,
     ) -> Result<Self, IntegerError> {
@@ -188,7 +188,7 @@ impl Integer {
     }
 
     pub fn from_input<F: PrimeField, G: GroupType<F>, CS: ConstraintSystem<F>>(
-        cs: &mut CS,
+        cs: CS,
         name: &str,
         value: Value,
     ) -> Result<ConstrainedValue<F, G>, IntegerError> {
@@ -219,7 +219,7 @@ impl Integer {
         })
     }
 
-    pub fn negate<F: PrimeField, CS: ConstraintSystem<F>>(self, cs: &mut CS) -> Result<Self, IntegerError> {
+    pub fn negate<F: PrimeField, CS: ConstraintSystem<F>>(self, mut cs: CS) -> Result<Self, IntegerError> {
         let unique_namespace = format!("enforce -{}", self);
 
         let a = self;
@@ -229,7 +229,7 @@ impl Integer {
         result.ok_or_else(|| IntegerError::negate_operation())
     }
 
-    pub fn add<F: PrimeField, CS: ConstraintSystem<F>>(self, cs: &mut CS, other: Self) -> Result<Self, IntegerError> {
+    pub fn add<F: PrimeField, CS: ConstraintSystem<F>>(self, mut cs: CS, other: Self) -> Result<Self, IntegerError> {
         let unique_namespace = format!("enforce {} + {}", self, other);
 
         let a = self;
@@ -240,7 +240,7 @@ impl Integer {
         result.ok_or_else(|| IntegerError::binary_operation("+".to_string()))
     }
 
-    pub fn sub<F: PrimeField, CS: ConstraintSystem<F>>(self, cs: &mut CS, other: Self) -> Result<Self, IntegerError> {
+    pub fn sub<F: PrimeField, CS: ConstraintSystem<F>>(self, mut cs: CS, other: Self) -> Result<Self, IntegerError> {
         let unique_namespace = format!("enforce {} - {}", self, other);
 
         let a = self;
@@ -251,7 +251,7 @@ impl Integer {
         result.ok_or_else(|| IntegerError::binary_operation("-".to_string()))
     }
 
-    pub fn mul<F: PrimeField, CS: ConstraintSystem<F>>(self, cs: &mut CS, other: Self) -> Result<Self, IntegerError> {
+    pub fn mul<F: PrimeField, CS: ConstraintSystem<F>>(self, mut cs: CS, other: Self) -> Result<Self, IntegerError> {
         let unique_namespace = format!("enforce {} * {}", self, other);
 
         let a = self;
@@ -262,7 +262,7 @@ impl Integer {
         result.ok_or_else(|| IntegerError::binary_operation("*".to_string()))
     }
 
-    pub fn div<F: PrimeField, CS: ConstraintSystem<F>>(self, cs: &mut CS, other: Self) -> Result<Self, IntegerError> {
+    pub fn div<F: PrimeField, CS: ConstraintSystem<F>>(self, mut cs: CS, other: Self) -> Result<Self, IntegerError> {
         let unique_namespace = format!("enforce {} ÷ {}", self, other);
 
         let a = self;
@@ -273,7 +273,7 @@ impl Integer {
         result.ok_or_else(|| IntegerError::binary_operation("÷".to_string()))
     }
 
-    pub fn pow<F: PrimeField, CS: ConstraintSystem<F>>(self, cs: &mut CS, other: Self) -> Result<Self, IntegerError> {
+    pub fn pow<F: PrimeField, CS: ConstraintSystem<F>>(self, mut cs: CS, other: Self) -> Result<Self, IntegerError> {
         let unique_namespace = format!("enforce {} ** {}", self, other);
 
         let a = self;

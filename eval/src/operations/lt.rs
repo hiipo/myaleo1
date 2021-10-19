@@ -21,7 +21,7 @@ use snarkvm_r1cs::ConstraintSystem;
 use crate::{errors::ValueError, ConstrainedValue, GroupType};
 
 pub fn evaluate_lt<F: PrimeField, G: GroupType<F>, CS: ConstraintSystem<F>>(
-    cs: &mut CS,
+    mut cs: CS,
     left: ConstrainedValue<F, G>,
     right: ConstrainedValue<F, G>,
 ) -> Result<ConstrainedValue<F, G>, ValueError> {

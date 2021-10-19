@@ -63,9 +63,9 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
     fn resolve_binary<CS: ConstraintSystem<F>>(
         &mut self,
         data: &QueryData<2>,
-        cs: &mut CS,
+        mut cs: CS,
     ) -> Result<(ConstrainedValue<F, G>, ConstrainedValue<F, G>)> {
-        let left = self.resolve(data.values.get(0).unwrap(), cs)?.into_owned();
+        let left = self.resolve(data.values.get(0).unwrap(), cs.ns(|| "resolve binary left"))?.into_owned();
         let right = self.resolve(data.values.get(1).unwrap(), cs)?.into_owned();
         Ok((left, right))
     }
@@ -74,72 +74,72 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
     pub(super) fn evaluate_instruction<'b, CS: ConstraintSystem<F>>(
         &mut self,
         instruction: &'b Instruction,
-        cs: &mut CS,
+        mut cs: CS,
     ) -> Result<Option<ConstrainedValue<F, G>>> {
         match instruction {
             Instruction::Add(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::enforce_add(&mut self.cs(cs), left, right)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction add"))?;
+                let out = operations::enforce_add(self.cs(&mut cs), left, right)?;
                 self.store(data.destination, out);
             }
             Instruction::Sub(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::enforce_sub(&mut self.cs(cs), left, right)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction sub"))?;
+                let out = operations::enforce_sub(self.cs(&mut cs), left, right)?;
                 self.store(data.destination, out);
             }
             Instruction::Mul(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::enforce_mul(&mut self.cs(cs), left, right)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction mul"))?;
+                let out = operations::enforce_mul(self.cs(&mut cs), left, right)?;
                 self.store(data.destination, out);
             }
             Instruction::Div(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::enforce_div(&mut self.cs(cs), left, right)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction div"))?;
+                let out = operations::enforce_div(self.cs(&mut cs), left, right)?;
                 self.store(data.destination, out);
             }
             Instruction::Pow(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::enforce_pow(&mut self.cs(cs), left, right)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction pow"))?;
+                let out = operations::enforce_pow(self.cs(&mut cs), left, right)?;
                 self.store(data.destination, out);
             }
             Instruction::Or(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::enforce_or(&mut self.cs(cs), left, right)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction or"))?;
+                let out = operations::enforce_or(self.cs(&mut cs), left, right)?;
                 self.store(data.destination, out);
             }
             Instruction::And(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::enforce_and(&mut self.cs(cs), left, right)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction and"))?;
+                let out = operations::enforce_and(self.cs(&mut cs), left, right)?;
                 self.store(data.destination, out);
             }
             Instruction::Eq(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::evaluate_eq(&mut self.cs(cs), left, right)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction eq"))?;
+                let out = operations::evaluate_eq(self.cs(&mut cs), left, right)?;
                 self.store(data.destination, out);
             }
             Instruction::Ne(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::evaluate_not(operations::evaluate_eq(&mut self.cs(cs), left, right)?)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction ne"))?;
+                let out = operations::evaluate_not(operations::evaluate_eq(self.cs(&mut cs), left, right)?)?;
                 self.store(data.destination, out);
             }
             Instruction::Ge(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::evaluate_ge(&mut self.cs(cs), left, right)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction ge"))?;
+                let out = operations::evaluate_ge(self.cs(&mut cs), left, right)?;
                 self.store(data.destination, out);
             }
             Instruction::Gt(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::evaluate_gt(&mut self.cs(cs), left, right)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction gt"))?;
+                let out = operations::evaluate_gt(self.cs(&mut cs), left, right)?;
                 self.store(data.destination, out);
             }
             Instruction::Le(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::evaluate_le(&mut self.cs(cs), left, right)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction le"))?;
+                let out = operations::evaluate_le(self.cs(&mut cs), left, right)?;
                 self.store(data.destination, out);
             }
             Instruction::Lt(data) => {
-                let (left, right) = self.resolve_binary(data, cs)?;
-                let out = operations::evaluate_lt(&mut self.cs(cs), left, right)?;
+                let (left, right) = self.resolve_binary(data, cs.ns(|| "evaluate instruction lt"))?;
+                let out = operations::evaluate_lt(self.cs(&mut cs), left, right)?;
                 self.store(data.destination, out);
             }
             Instruction::BitOr(_) => return Err(anyhow!("BitOr unimplemented")),
@@ -155,8 +155,8 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                 self.store(*destination, out);
             }
             Instruction::Negate(QueryData { destination, values }) => {
-                let inner = self.resolve(values.get(0).unwrap(), cs)?.into_owned();
-                let out = operations::enforce_negate(&mut self.cs(cs), inner)?;
+                let inner = self.resolve(values.get(0).unwrap(), cs.ns(|| "evaluate instruction negate"))?.into_owned();
+                let out = operations::enforce_negate(self.cs(&mut cs), inner)?;
                 self.store(*destination, out);
             }
             Instruction::BitNot(_) => return Err(anyhow!("BitNot unimplemented")),
@@ -173,7 +173,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             Instruction::ArrayInit(VarData { destination, values }) => {
                 let mut inner = Vec::with_capacity(values.len());
                 for value in values {
-                    let value = self.resolve(value, cs)?.into_owned();
+                    let value = self.resolve(value, cs.ns(|| "evaluate instruction array init"))?.into_owned();
                     match value {
                         ConstrainedValue::Array(values) => {
                             for value in values {
@@ -204,14 +204,14 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             Instruction::TupleInit(VarData { destination, values }) => {
                 let mut inner = Vec::with_capacity(values.len());
                 for value in values {
-                    inner.push(self.resolve(value, cs)?.into_owned());
+                    inner.push(self.resolve(value, cs.ns(|| "evaluate instruction tuple init"))?.into_owned());
                 }
                 let array = ConstrainedValue::Tuple(inner);
                 self.store(*destination, array);
             }
             Instruction::TupleIndexGet(QueryData { destination, values }) => {
                 let index = self
-                    .resolve(values.get(1).unwrap(), cs)?
+                    .resolve(values.get(1).unwrap(), cs.ns(|| "evaluate instruction tuple index get"))?
                     .extract_integer()
                     .map_err(|value| anyhow!("invalid index type for tuple index: {}", value))?
                     .to_usize()
@@ -237,13 +237,13 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             }
             Instruction::TupleIndexStore(QueryData { destination, values }) => {
                 let index = self
-                    .resolve(values.get(0).unwrap(), cs)?
+                    .resolve(values.get(0).unwrap(), cs.ns(|| "evaluate instruction tuple index store index"))?
                     .extract_integer()
                     .map_err(|value| anyhow!("invalid index type for tuple store: {}", value))?
                     .to_usize()
                     .ok_or_else(|| anyhow!("illegal variable input for tuple store"))?;
 
-                let tuple = self.resolve(&Value::Ref(*destination), cs)?.into_owned();
+                let tuple = self.resolve(&Value::Ref(*destination), cs.ns(|| "evaluate instruction tuple index store tuple"))?.into_owned();
                 let mut tuple = tuple
                     .extract_tuple()
                     .map_err(|value| anyhow!("invalid tuple type for tuple store: {}", value))?
@@ -262,13 +262,13 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                 self.store(*destination, ConstrainedValue::Tuple(tuple));
             }
             Instruction::Pick(QueryData { destination, values }) => {
-                let condition = self.resolve(values.get(0).unwrap(), cs)?.into_owned();
+                let condition = self.resolve(values.get(0).unwrap(), cs.ns(|| "evaluate instruction pick condition"))?.into_owned();
                 let condition = condition
                     .extract_bool()
                     .map_err(|value| anyhow!("invalid value for pick condition: {}", value))?;
-                let left = self.resolve(values.get(1).unwrap(), cs)?.into_owned();
-                let right = self.resolve(values.get(2).unwrap(), cs)?.into_owned();
-                let picked = ConstrainedValue::conditionally_select(&mut self.cs(cs), &condition, &left, &right)?;
+                let left = self.resolve(values.get(1).unwrap(), cs.ns(|| "evaluate instruction pick left"))?.into_owned();
+                let right = self.resolve(values.get(2).unwrap(), cs.ns(|| "evaluate instruction pick right"))?.into_owned();
+                let picked = ConstrainedValue::conditionally_select(self.cs(&mut cs), &condition, &left, &right)?;
                 self.store(*destination, picked);
             }
             Instruction::Mask(_) => {
@@ -328,7 +328,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             }) => {
                 let arguments = arguments
                     .iter()
-                    .map(|x| self.resolve(x, cs).map(Cow::into_owned))
+                    .map(|x| self.resolve(x, cs.ns(|| "evaluate instruction call core")).map(Cow::into_owned))
                     .collect::<Result<Vec<_>>>()?;
 
                 let out = self.call_core(&**identifier, &arguments, cs)?;

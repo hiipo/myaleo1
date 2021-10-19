@@ -21,35 +21,29 @@ use snarkvm_r1cs::ConstraintSystem;
 use crate::{errors::ValueError, operations::enforce_and, ConstrainedValue, GroupType};
 
 pub fn evaluate_eq<F: PrimeField, G: GroupType<F>, CS: ConstraintSystem<F>>(
-    cs: &mut CS,
+    mut cs: CS,
     left: ConstrainedValue<F, G>,
     right: ConstrainedValue<F, G>,
 ) -> Result<ConstrainedValue<F, G>, ValueError> {
     let namespace_string = format!("evaluate {} == {}", left, right);
     let constraint_result = match (left, right) {
         (ConstrainedValue::Address(address_1), ConstrainedValue::Address(address_2)) => {
-            let unique_namespace = cs.ns(|| namespace_string);
-            address_1.evaluate_equal(unique_namespace, &address_2)
+            address_1.evaluate_equal(cs.ns(|| namespace_string), &address_2)
         }
         (ConstrainedValue::Boolean(bool_1), ConstrainedValue::Boolean(bool_2)) => {
-            let unique_namespace = cs.ns(|| namespace_string);
-            bool_1.evaluate_equal(unique_namespace, &bool_2)
+            bool_1.evaluate_equal(cs.ns(|| namespace_string), &bool_2)
         }
         (ConstrainedValue::Char(char_1), ConstrainedValue::Char(char_2)) => {
-            let unique_namespace = cs.ns(|| namespace_string);
-            char_1.evaluate_equal(unique_namespace, &char_2)
+            char_1.evaluate_equal(cs.ns(|| namespace_string), &char_2)
         }
         (ConstrainedValue::Integer(num_1), ConstrainedValue::Integer(num_2)) => {
-            let unique_namespace = cs.ns(|| namespace_string);
-            num_1.evaluate_equal(unique_namespace, &num_2)
+            num_1.evaluate_equal(cs.ns(|| namespace_string), &num_2)
         }
         (ConstrainedValue::Field(field_1), ConstrainedValue::Field(field_2)) => {
-            let unique_namespace = cs.ns(|| namespace_string);
-            field_1.evaluate_equal(unique_namespace, &field_2)
+            field_1.evaluate_equal(cs.ns(|| namespace_string), &field_2)
         }
         (ConstrainedValue::Group(point_1), ConstrainedValue::Group(point_2)) => {
-            let unique_namespace = cs.ns(|| namespace_string);
-            point_1.evaluate_equal(unique_namespace, &point_2)
+            point_1.evaluate_equal(cs.ns(|| namespace_string), &point_2)
         }
         (ConstrainedValue::Array(arr_1), ConstrainedValue::Array(arr_2)) => {
             let mut current = ConstrainedValue::Boolean(Boolean::constant(true));
@@ -59,9 +53,9 @@ pub fn evaluate_eq<F: PrimeField, G: GroupType<F>, CS: ConstraintSystem<F>>(
             }
 
             for (i, (left, right)) in arr_1.into_iter().zip(arr_2.into_iter()).enumerate() {
-                let next = evaluate_eq(&mut cs.ns(|| format!("array[{}]", i)), left, right)?;
+                let next = evaluate_eq(cs.ns(|| format!("array[{}]", i)), left, right)?;
 
-                current = enforce_and(&mut cs.ns(|| format!("array result {}", i)), current, next)?;
+                current = enforce_and(cs.ns(|| format!("array result {}", i)), current, next)?;
             }
             return Ok(current);
         }
@@ -69,9 +63,9 @@ pub fn evaluate_eq<F: PrimeField, G: GroupType<F>, CS: ConstraintSystem<F>>(
             let mut current = ConstrainedValue::Boolean(Boolean::constant(true));
 
             for (i, (left, right)) in tuple_1.into_iter().zip(tuple_2.into_iter()).enumerate() {
-                let next = evaluate_eq(&mut cs.ns(|| format!("tuple_index {}", i)), left, right)?;
+                let next = evaluate_eq(cs.ns(|| format!("tuple_index {}", i)), left, right)?;
 
-                current = enforce_and(&mut cs.ns(|| format!("array result {}", i)), current, next)?;
+                current = enforce_and(cs.ns(|| format!("array result {}", i)), current, next)?;
             }
             return Ok(current);
         }

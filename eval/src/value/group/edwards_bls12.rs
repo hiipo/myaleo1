@@ -276,7 +276,7 @@ impl EdwardsGroupType {
         match self {
             EdwardsGroupType::Constant(constant) => {
                 <EdwardsBls12Gadget as AllocGadget<Affine<EdwardsParameters>, Fq>>::alloc(
-                    &mut cs.ns(|| format!("{:?}", constant)),
+                    cs.ns(|| format!("{:?}", constant)),
                     || Ok(constant),
                 )
             }
@@ -412,8 +412,8 @@ impl ConditionalEqGadget<Fq> for EdwardsGroupType {
             // c - a = a - c
             (EdwardsGroupType::Constant(constant_value), EdwardsGroupType::Allocated(allocated_value))
             | (EdwardsGroupType::Allocated(allocated_value), EdwardsGroupType::Constant(constant_value)) => {
-                let x = FpGadget::from(AllocatedFp::from(&mut cs, &constant_value.x));
-                let y = FpGadget::from(AllocatedFp::from(&mut cs, &constant_value.y));
+                let x = FpGadget::from(AllocatedFp::from(cs.ns(|| "conditional enforce equal x"), &constant_value.x));
+                let y = FpGadget::from(AllocatedFp::from(cs.ns(|| "conditional enforce equal y"), &constant_value.y));
                 let constant_gadget = EdwardsBls12Gadget::new(x, y);
 
                 constant_gadget.conditional_enforce_equal(cs, allocated_value, condition)
@@ -451,24 +451,24 @@ impl CondSelectGadget<Fq> for EdwardsGroupType {
 
 impl ToBitsBEGadget<Fq> for EdwardsGroupType {
     fn to_bits_be<CS: ConstraintSystem<Fq>>(&self, mut cs: CS) -> Result<Vec<Boolean>, SynthesisError> {
-        let self_gadget = self.allocated(&mut cs)?;
+        let self_gadget = self.allocated(cs.ns(|| "to_bits_be group"))?;
         self_gadget.to_bits_be(cs)
     }
 
     fn to_bits_be_strict<CS: ConstraintSystem<Fq>>(&self, mut cs: CS) -> Result<Vec<Boolean>, SynthesisError> {
-        let self_gadget = self.allocated(&mut cs)?;
+        let self_gadget = self.allocated(cs.ns(|| "to_bits_be_strict group"))?;
         self_gadget.to_bits_be_strict(cs)
     }
 }
 
 impl ToBytesGadget<Fq> for EdwardsGroupType {
     fn to_bytes<CS: ConstraintSystem<Fq>>(&self, mut cs: CS) -> Result<Vec<UInt8>, SynthesisError> {
-        let self_gadget = self.allocated(&mut cs)?;
+        let self_gadget = self.allocated(cs.ns(|| "to_bytes group"))?;
         self_gadget.to_bytes(cs)
     }
 
     fn to_bytes_strict<CS: ConstraintSystem<Fq>>(&self, mut cs: CS) -> Result<Vec<UInt8>, SynthesisError> {
-        let self_gadget = self.allocated(&mut cs)?;
+        let self_gadget = self.allocated(cs.ns(|| "to_bytes_strict group"))?;
         self_gadget.to_bytes_strict(cs)
     }
 }

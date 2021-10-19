@@ -74,11 +74,11 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
     }
 
     /// setup the state and call stack to start evaluating the target call instruction
-    fn setup_call<CS: ConstraintSystem<F>>(&mut self, data: &'a CallData, cs: &mut CS) -> Result<()> {
+    fn setup_call<CS: ConstraintSystem<F>>(&mut self, data: &'a CallData, mut cs: CS) -> Result<()> {
         let arguments = data
             .arguments
             .iter()
-            .map(|x| self.state_data.state.resolve(x, cs).map(|x| x.into_owned()))
+            .map(|x| self.state_data.state.resolve(x, cs.ns(|| "setup call arguments")).map(|x| x.into_owned()))
             .collect::<Result<Vec<_>, _>>()?;
 
         self.namespace_id_counter += 1;
@@ -96,7 +96,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
             instruction_index: 0,
             namespace_id: self.namespace_id_counter,
         };
-        state.cs_meta("function call", cs);
+        state.cs_meta("function call", &mut cs);
 
         let function = state.setup_evaluate_function(data.index, &arguments)?;
         let state_data = StateData {
@@ -132,7 +132,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
     }
 
     /// setup the state and call stack to start evaluating the target mask instruction
-    fn setup_mask<CS: ConstraintSystem<F>>(&mut self, data: &'a MaskData, cs: &mut CS) -> Result<()> {
+    fn setup_mask<CS: ConstraintSystem<F>>(&mut self, data: &'a MaskData, cs: CS) -> Result<()> {
         if data.instruction_count + self.state_data.state.instruction_index
             >= self.state_data.function.instructions.len() as u32
         {
@@ -177,7 +177,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
     }
 
     /// returns to the previous state in the call stack and updates variables from the mask instructions evaluation
-    fn finish_mask<CS: ConstraintSystem<F>>(&mut self, condition: Boolean, cs: &mut CS) -> Result<()> {
+    fn finish_mask<CS: ConstraintSystem<F>>(&mut self, condition: Boolean, mut cs: CS) -> Result<()> {
         let inner_state = self.unnest();
         let assignments = inner_state.state.variables;
         let target_index = inner_state.block_start + inner_state.block_instruction_count;
@@ -191,7 +191,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
             {
                 let prior = prior.clone(); //todo: optimize away clone
                 let value = ConstrainedValue::conditionally_select(
-                    &mut self.state_data.state.cs_meta(&*format!("selection {}", variable), cs),
+                    self.state_data.state.cs_meta(&*format!("selection {}", variable), &mut cs),
                     &condition,
                     &value,
                     &prior,
@@ -203,7 +203,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
         match (self.state_data.result.clone(), result.clone()) {
             (Some(prior), Some(interior)) => {
                 self.state_data.result = Some(ConstrainedValue::conditionally_select(
-                    &mut self.state_data.state.cs_meta(&*format!("selection result"), cs),
+                    self.state_data.state.cs_meta(&*format!("selection result"), &mut cs),
                     &condition,
                     &interior,
                     &prior,
@@ -220,14 +220,14 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
 
     /// setup the state and call stack to start evaluating the target repeat instruction.
     /// creates a state for every iteration and adds them all to the call stack
-    fn setup_repeat<CS: ConstraintSystem<F>>(&mut self, data: &'a RepeatData, cs: &mut CS) -> Result<()> {
+    fn setup_repeat<CS: ConstraintSystem<F>>(&mut self, data: &'a RepeatData, mut cs: CS) -> Result<()> {
         if data.instruction_count + self.state_data.state.instruction_index
             >= self.state_data.function.instructions.len() as u32
         {
             return Err(anyhow!("illegal repeat block length"));
         }
 
-        let from = self.state_data.state.resolve(&data.from, cs)?.into_owned();
+        let from = self.state_data.state.resolve(&data.from, cs.ns(|| "setup repeat from"))?.into_owned();
         let from_int = from
             .extract_integer()
             .map_err(|value| anyhow!("illegal type for loop init: {}", value))?
@@ -348,7 +348,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
         function: &'a Function,
         state: EvaluatorState<'a, F, G>,
         index: u32,
-        cs: &mut CS,
+        mut cs: CS,
     ) -> Result<ConstrainedValue<F, G>> {
         let mut evaluator = Self {
             call_stack: Vec::new(),
@@ -356,15 +356,15 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
             state_data: StateData::create_initial_state_data(state, function, Rc::new(Vec::new()), index)?,
         };
         loop {
-            match evaluator.state_data.evaluate_block(cs) {
+            match evaluator.state_data.evaluate_block(cs.ns(|| "evaluate function evaluate block")) {
                 Ok(Some(Instruction::Call(data))) => {
-                    evaluator.setup_call(data, cs)?;
+                    evaluator.setup_call(data, cs.ns(|| "evaluate function setup call"))?;
                 }
                 Ok(Some(Instruction::Mask(data))) => {
-                    evaluator.setup_mask(data, cs)?;
+                    evaluator.setup_mask(data, cs.ns(|| "evaluate function setup mask"))?;
                 }
                 Ok(Some(Instruction::Repeat(data))) => {
-                    evaluator.setup_repeat(data, cs)?;
+                    evaluator.setup_repeat(data, cs.ns(|| "evaluate function setup repeat"))?;
                 }
                 Ok(Some(e)) => panic!("invalid control instruction: {:?}", e),
                 Ok(None) => match evaluator.state_data.parent_instruction {
@@ -372,7 +372,8 @@ impl<'a, F: PrimeField, G: GroupType<F>> FunctionEvaluator<'a, F, G> {
                         evaluator.finish_call(data)?;
                     }
                     ParentInstruction::Mask(condition) => {
-                        evaluator.finish_mask(condition, cs)?;
+                        // todo: is this fine? conditional cs mutation
+                        evaluator.finish_mask(condition, cs.ns(|| "evaluate function finish mask"))?;
                     }
                     ParentInstruction::Repeat(iter_variable) => {
                         evaluator.finish_repeat(iter_variable)?;
@@ -471,10 +472,10 @@ impl<'a, F: PrimeField, G: GroupType<F>> StateData<'a, F, G> {
 
     /// evaluates each instruction in a block.
     /// if a control instruction was hit (mask, repeat, call) then it halts evaluation and returns the instruction
-    pub fn evaluate_block<CS: ConstraintSystem<F>>(&mut self, cs: &mut CS) -> Result<Option<&'a Instruction>> {
+    pub fn evaluate_block<CS: ConstraintSystem<F>>(&mut self, mut cs: CS) -> Result<Option<&'a Instruction>> {
         while self.state.instruction_index < self.block_start + self.block_instruction_count {
             let instruction = &self.function.instructions[self.state.instruction_index as usize];
-            match self.evaluate_instruction(instruction, cs)? {
+            match self.evaluate_instruction(instruction, cs.ns(|| "evaluate block"))? {
                 ControlFlow::Recurse(ins) => return Ok(Some(ins)),
                 ControlFlow::Return => {
                     return Ok(None);
@@ -490,7 +491,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> StateData<'a, F, G> {
     fn evaluate_instruction<CS: ConstraintSystem<F>>(
         &mut self,
         instruction: &'a Instruction,
-        cs: &mut CS,
+        cs: CS,
     ) -> Result<ControlFlow<'a>> {
         match instruction {
             Instruction::Call(_) | Instruction::Mask(_) | Instruction::Repeat(_) => {
@@ -560,19 +561,19 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
     }
 
     fn allocate_input<CS2: ConstraintSystem<F>>(
-        cs: &mut CS2,
+        mut cs: CS2,
         type_: &Type,
         name: &str,
         value: Value,
     ) -> Result<ConstrainedValue<F, G>, ValueError> {
         Ok(match type_ {
-            Type::Address => Address::from_input(&mut cs.ns(|| name.to_string()), name, value)?,
-            Type::Boolean => bool_from_input(&mut cs.ns(|| name.to_string()), name, value)?,
-            Type::Field => FieldType::from_input(&mut cs.ns(|| name.to_string()), name, value)?,
-            Type::Char => Char::from_input(&mut cs.ns(|| name.to_string()), name, value)?,
+            Type::Address => Address::from_input(cs.ns(|| name.to_string()), name, value)?,
+            Type::Boolean => bool_from_input(cs.ns(|| name.to_string()), name, value)?,
+            Type::Field => FieldType::from_input(cs.ns(|| name.to_string()), name, value)?,
+            Type::Char => Char::from_input(cs.ns(|| name.to_string()), name, value)?,
             Type::Group => match value {
                 Value::Group(g) => {
-                    ConstrainedValue::Group(G::constant(&g)?.to_allocated(&mut cs.ns(|| name.to_string()))?)
+                    ConstrainedValue::Group(G::constant(&g)?.to_allocated(cs.ns(|| name.to_string()))?)
                 }
                 _ => {
                     return Err(
@@ -589,7 +590,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             | Type::I16
             | Type::I32
             | Type::I64
-            | Type::I128 => Integer::from_input(&mut cs.ns(|| name.to_string()), name, value)?,
+            | Type::I128 => Integer::from_input(cs.ns(|| name.to_string()), name, value)?,
             Type::Array(inner, len) => {
                 let values = match value {
                     Value::Array(x) => x,
@@ -604,7 +605,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                 let mut out = Vec::with_capacity(values.len());
                 for (i, value) in values.into_iter().enumerate() {
                     out.push(Self::allocate_input(
-                        &mut cs.ns(|| format!("{}[{}]", name, i)),
+                        cs.ns(|| format!("{}[{}]", name, i)),
                         &**inner,
                         name,
                         value,
@@ -626,7 +627,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                 let mut out = Vec::with_capacity(values.len());
                 for (i, (value, type_)) in values.into_iter().zip(inner.iter()).enumerate() {
                     out.push(Self::allocate_input(
-                        &mut cs.ns(|| format!("{}.{}", name, i)),
+                        cs.ns(|| format!("{}.{}", name, i)),
                         type_,
                         name,
                         value,
@@ -641,7 +642,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
     pub fn resolve<'b, CS: ConstraintSystem<F>>(
         &'b mut self,
         value: &Value,
-        cs: &'b mut CS,
+        mut cs: CS,
     ) -> Result<Cow<'b, ConstrainedValue<F, G>>> {
         Ok(Cow::Owned(match value {
             Value::Address(bytes) => ConstrainedValue::Address(Address::constant(&bytes[..])?),
@@ -654,14 +655,14 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                 let mut out = Vec::with_capacity(items.len());
                 // todo: optionally check inner types
                 for item in items {
-                    out.push(self.resolve(item, cs)?.into_owned());
+                    out.push(self.resolve(item, cs.ns(|| "resolve array"))?.into_owned());
                 }
                 ConstrainedValue::Array(out)
             }
             Value::Tuple(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
-                    out.push(self.resolve(item, cs)?.into_owned());
+                    out.push(self.resolve(item, cs.ns(|| "resolve tuple"))?.into_owned());
                 }
                 ConstrainedValue::Tuple(out)
             }
@@ -687,9 +688,8 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
         name: &str,
         input_header: &[IrInput],
         input_values: &IndexMap<String, Value>,
-        cs: &mut CS,
+        mut cs: CS,
     ) -> Result<()> {
-        let mut cs = cs.ns(|| format!("input {}", name));
         for ir_input in input_header {
             let value = input_values
                 .get(&ir_input.name)
@@ -701,7 +701,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                     ir_input.type_
                 ));
             }
-            let value = Self::allocate_input(&mut cs, &ir_input.type_, &*ir_input.name, value.clone())?;
+            let value = Self::allocate_input(cs.ns(|| format!("input {}", name)), &ir_input.type_, &*ir_input.name, value.clone())?;
             self.variables.insert(ir_input.variable, value);
         }
         Ok(())
@@ -711,7 +711,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
         &mut self,
         input_header: &[IrInput],
         input_values: &IndexMap<String, Value>,
-        cs: &mut CS,
+        mut cs: CS,
     ) -> Result<()> {
         for ir_input in input_header {
             let value = input_values
@@ -724,7 +724,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                     ir_input.type_
                 ));
             }
-            let value = self.resolve(value, cs)?.into_owned();
+            let value = self.resolve(value, cs.ns(|| "handle const input block"))?.into_owned();
             self.variables.insert(ir_input.variable, value);
         }
         Ok(())

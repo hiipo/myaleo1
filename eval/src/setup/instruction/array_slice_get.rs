@@ -20,7 +20,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
     pub(super) fn evaluate_array_slice_get<CS: ConstraintSystem<F>>(
         &mut self,
         instruction: &Instruction,
-        cs: &mut CS,
+        mut cs: CS,
     ) -> Result<()> {
         let (destination, values) = if let Instruction::ArraySliceGet(QueryData { destination, values }) = instruction {
             (destination, values)
@@ -28,19 +28,19 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             unimplemented!("unsupported instruction in evaluate_array_slice_get");
         };
 
-        let array = self.resolve(values.get(0).unwrap(), cs)?.into_owned();
+        let array = self.resolve(values.get(0).unwrap(), cs.ns(|| "evaluate array slice get array"))?.into_owned();
         let array = array
             .extract_array()
             .map_err(|value| anyhow!("illegal value for array slice: {}", value))?;
-        let from = self.resolve(values.get(1).unwrap(), cs)?.into_owned();
+        let from = self.resolve(values.get(1).unwrap(), cs.ns(|| "evaluate array slice get from"))?.into_owned();
         let from_resolved = from
             .extract_integer()
             .map_err(|value| anyhow!("invalid value for array slice from index: {}", value))?;
-        let to = self.resolve(values.get(2).unwrap(), cs)?.into_owned();
+        let to = self.resolve(values.get(2).unwrap(), cs.ns(|| "evaluate array slice get to"))?.into_owned();
         let to_resolved = to
             .extract_integer()
             .map_err(|value| anyhow!("invalid value for array slice to index: {}", value))?;
-        let length = self.resolve(values.get(3).unwrap(), cs)?.into_owned();
+        let length = self.resolve(values.get(3).unwrap(), cs.ns(|| "evaluate array slice get length"))?.into_owned();
         let length = length
             .extract_integer()
             .map_err(|value| anyhow!("invalid value for array slice length: {}", value))?
@@ -68,10 +68,10 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             }
             ConstrainedValue::Array(array[left..right].to_owned())
         } else {
-            let mut cs = self.cs(cs);
+            let mut cs = self.cs(&mut cs);
             {
                 let calc_len = operations::enforce_sub::<F, G, _>(
-                    &mut cs,
+                    cs.ns(|| "evaluate array  slice get enforce sub"),
                     ConstrainedValue::Integer(to_resolved.clone()),
                     ConstrainedValue::Integer(from_resolved.clone()),
                 )?;
@@ -79,15 +79,13 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                     ConstrainedValue::Integer(i) => i,
                     _ => unimplemented!("illegal non-Integer returned from sub"),
                 };
-                let namespace_string = format!("evaluate array range access length check");
-                let mut unique_namespace = cs.ns(|| namespace_string);
                 calc_len
-                    .enforce_equal(&mut unique_namespace, &Integer::new(&IrInteger::U32(length as u32)))
+                    .enforce_equal(cs.ns(|| "evaluate array range access length check"), &Integer::new(&IrInteger::U32(length as u32)))
                     .map_err(|e| ValueError::cannot_enforce("array length check", e))?;
             }
             {
                 Self::array_bounds_check(
-                    &mut cs,
+                    cs.ns(|| "evaluate array slice get array_bounds_check"),
                     to_resolved,
                     array
                         .len()
@@ -105,10 +103,9 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                     break;
                 };
                 let array_value = ConstrainedValue::Array(window.to_vec());
-                let mut unique_namespace = cs.ns(|| format!("array index eq-check {}", i));
 
                 let equality = operations::evaluate_eq::<F, G, _>(
-                    &mut unique_namespace,
+                    cs.ns(|| format!("array index eq-check {}", i)),
                     ConstrainedValue::Integer(from_resolved.clone()),
                     ConstrainedValue::Integer(Integer::new(&IrInteger::U32(i as u32))),
                 )?;
@@ -117,8 +114,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                     _ => unimplemented!("unexpected non-Boolean for evaluate_eq"),
                 };
 
-                let unique_namespace = unique_namespace.ns(|| format!("array index {}", i));
-                result = ConstrainedValue::conditionally_select(unique_namespace, &equality, &array_value, &result)
+                result = ConstrainedValue::conditionally_select(cs.ns(|| format!("array index {}", i)), &equality, &array_value, &result)
                     .map_err(|e| ValueError::cannot_enforce("conditional select", e))?;
             }
             result

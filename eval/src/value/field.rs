@@ -49,7 +49,7 @@ impl<F: PrimeField> FieldType<F> {
         let value = F::from_repr(<F as PrimeField>::BigInteger::from_slice(&number.values[..]))
             .ok_or_else(|| FieldError::invalid_field(format!("{}", number)))?;
 
-        let mut value = FpGadget::alloc_constant(&mut cs, || Ok(value))
+        let mut value = FpGadget::alloc_constant(cs.ns(|| "constant allocate constant"), || Ok(value))
             .map_err(|_| FieldError::invalid_field(format!("{}", number)))?;
 
         if number.negate {
@@ -129,7 +129,7 @@ impl<F: PrimeField> FieldType<F> {
     }
 
     pub(crate) fn from_input<G: GroupType<F>, CS: ConstraintSystem<F>>(
-        cs: &mut CS,
+        mut cs: CS,
         name: &str,
         value: Value,
     ) -> Result<ConstrainedValue<F, G>, FieldError> {
@@ -140,7 +140,7 @@ impl<F: PrimeField> FieldType<F> {
             return Err(FieldError::invalid_field(value.to_string()));
         };
 
-        let mut field = allocate_field(cs, name, &value.values[..])?;
+        let mut field = allocate_field(cs.ns(|| "from input"), name, &value.values[..])?;
         if value.negate {
             field = field.negate(cs)?;
         }
@@ -270,7 +270,7 @@ impl<F: PrimeField> std::fmt::Display for FieldType<F> {
 }
 
 pub(crate) fn allocate_field<F: PrimeField, CS: ConstraintSystem<F>>(
-    cs: &mut CS,
+    cs: CS,
     name: &str,
     raw_value: &[u64],
 ) -> Result<FieldType<F>, FieldError> {

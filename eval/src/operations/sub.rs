@@ -20,7 +20,7 @@ use snarkvm_r1cs::ConstraintSystem;
 use crate::{errors::ValueError, ConstrainedValue, GroupType};
 
 pub fn enforce_sub<F: PrimeField, G: GroupType<F>, CS: ConstraintSystem<F>>(
-    cs: &mut CS,
+    cs: CS,
     left: ConstrainedValue<F, G>,
     right: ConstrainedValue<F, G>,
 ) -> Result<ConstrainedValue<F, G>, ValueError> {

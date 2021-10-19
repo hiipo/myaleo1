@@ -43,20 +43,20 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
     pub fn call_core_blake2s<CS: ConstraintSystem<F>>(
         &mut self,
         arguments: &[ConstrainedValue<F, G>],
-        cs: &mut CS,
+        mut cs: CS,
     ) -> Result<ConstrainedValue<F, G>> {
         if arguments.len() != 2 {
             return Err(anyhow!("illegal blake2s call, expected 2 arguments"));
         }
         let input = unwrap_argument(&arguments[1])?;
         let seed = unwrap_argument(&arguments[0])?;
-        let mut cs = self.cs(cs);
+        let mut cs = self.cs(&mut cs);
         let digest = Blake2sGadget::check_evaluation_gadget(cs.ns(|| "blake2s hash"), &seed[..], &input[..])
             .map_err(|e| ValueError::cannot_enforce("Blake2s check evaluation gadget", e))?;
 
         Ok(ConstrainedValue::Array(
             digest
-                .to_bytes(&mut cs)
+                .to_bytes(cs)
                 .map_err(|e| ValueError::cannot_enforce("Vec<UInt8> ToBytes", e))?
                 .into_iter()
                 .map(Integer::U8)

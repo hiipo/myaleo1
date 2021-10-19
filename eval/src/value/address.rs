@@ -56,7 +56,7 @@ impl Address {
     }
 
     pub(crate) fn from_input<F: PrimeField, G: GroupType<F>, CS: ConstraintSystem<F>>(
-        cs: &mut CS,
+        cs: CS,
         name: &str,
         value: Value,
     ) -> Result<ConstrainedValue<F, G>, AddressError> {
@@ -139,10 +139,10 @@ impl<F: PrimeField> EvaluateEqGadget<F> for Address {
 
             for (i, (a, b)) in self.bytes.iter().zip(&other.bytes).enumerate() {
                 let equal =
-                    a.evaluate_equal(&mut cs.ns(|| format!("address evaluate equality for {}-th byte", i)), b)?;
+                    a.evaluate_equal(cs.ns(|| format!("address evaluate equality for {}-th byte", i)), b)?;
 
                 result = Boolean::and(
-                    &mut cs.ns(|| format!("address and result for {}-th byte", i)),
+                    cs.ns(|| format!("address and result for {}-th byte", i)),
                     &equal,
                     &result,
                 )?;
@@ -181,7 +181,7 @@ impl<F: PrimeField> ConditionalEqGadget<F> for Address {
 
             for (i, (a, b)) in self.bytes.iter().zip(&other.bytes).enumerate() {
                 a.conditional_enforce_equal(
-                    &mut cs.ns(|| format!("address equality check for {}-th byte", i)),
+                    cs.ns(|| format!("address equality check for {}-th byte", i)),
                     b,
                     condition,
                 )?;
@@ -227,13 +227,13 @@ impl<F: PrimeField> CondSelectGadget<F> for Address {
                 .zip(&second.bytes)
                 .enumerate()
                 .map(|(i, (a, b))| {
-                    UInt8::conditionally_select(&mut cs.ns(|| format!("address_cond_select_{}", i)), cond, a, b)
+                    UInt8::conditionally_select(cs.ns(|| format!("address_cond_select_{}", i)), cond, a, b)
                         .unwrap()
                 })
                 .collect::<Vec<UInt8>>();
 
             for (i, (actual, expected)) in result.bytes.iter().zip(expected_bytes.iter()).enumerate() {
-                actual.enforce_equal(&mut cs.ns(|| format!("selected_result_byte_{}", i)), expected)?;
+                actual.enforce_equal(cs.ns(|| format!("selected_result_byte_{}", i)), expected)?;
             }
 
             Ok(result)

@@ -18,7 +18,7 @@ use super::*;
 
 impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
     pub(super) fn array_bounds_check<CS: ConstraintSystem<F>>(
-        cs: &mut CS,
+        mut cs: CS,
         index_resolved: &Integer,
         array_len: u32,
     ) -> Result<()> {
@@ -38,7 +38,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             value => return Err(ArrayError::invalid_index(value.to_string()).into()),
         };
         let bounds_check = operations::evaluate_lt::<F, G, _>(
-            cs,
+            cs.ns(|| "array bounds check bounds"),
             ConstrainedValue::Integer(index_resolved.clone()),
             ConstrainedValue::Integer(Integer::new(&array_len_value)),
         )?;
@@ -46,10 +46,8 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             ConstrainedValue::Boolean(b) => b,
             _ => unimplemented!("illegal non-Integer returned from lt"),
         };
-        let namespace_string = format!("evaluate array access bounds");
-        let mut unique_namespace = cs.ns(|| namespace_string);
         bounds_check
-            .enforce_equal(&mut unique_namespace, &Boolean::Constant(true))
+            .enforce_equal(cs.ns(|| "evaluate array access bounds"), &Boolean::Constant(true))
             .map_err(|e| ValueError::cannot_enforce("array bounds check", e))?;
         Ok(())
     }
@@ -57,7 +55,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
     pub(super) fn evaluate_array_index_get<CS: ConstraintSystem<F>>(
         &mut self,
         instruction: &Instruction,
-        cs: &mut CS,
+        mut cs: CS,
     ) -> Result<()> {
         let (destination, values) = if let Instruction::ArrayIndexGet(QueryData { destination, values }) = instruction {
             (destination, values)
@@ -65,8 +63,8 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
             unimplemented!("unsupported instruction in evaluate_array_index_get");
         };
 
-        let index = self.resolve(values.get(1).unwrap(), cs)?.into_owned();
-        let array = self.resolve(values.get(0).unwrap(), cs)?.into_owned();
+        let index = self.resolve(values.get(1).unwrap(), cs.ns(|| "evaluate array index get index"))?.into_owned();
+        let array = self.resolve(values.get(0).unwrap(), cs.ns(|| "evaluate array index get array"))?.into_owned();
         let index_resolved = index
             .extract_integer()
             .map_err(|value| anyhow!("invalid value for array index: {}", value))?;
@@ -81,20 +79,19 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
         } else if array.is_empty() {
             return Err(ArrayError::array_index_out_of_bounds(0, 0).into());
         } else {
-            let mut cs = self.cs(cs);
+            let mut cs = self.cs(&mut cs);
             {
                 let array_len: u32 = array
                     .len()
                     .try_into()
                     .map_err(|_| ArrayError::array_length_out_of_bounds())?;
-                Self::array_bounds_check(&mut cs, index_resolved, array_len)?;
+                Self::array_bounds_check(cs.ns(|| "evaluate array index get array bounds check"), index_resolved, array_len)?;
             }
 
             let mut array = array.clone();
             let mut current_value = array.pop().unwrap();
             for (i, item) in array.into_iter().enumerate() {
                 let namespace_string = format!("evaluate array access eq {}", i);
-                let eq_namespace = cs.ns(|| namespace_string);
 
                 let i = match &index_resolved {
                     Integer::U8(_) => Integer::U8(UInt8::constant(
@@ -112,12 +109,11 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                     _ => return Err(ArrayError::invalid_index(index_resolved.get_type().to_string()).into()),
                 };
                 let index_comparison = index_resolved
-                    .evaluate_equal(eq_namespace, &i)
+                    .evaluate_equal(cs.ns(|| namespace_string), &i)
                     .map_err(|e| ValueError::cannot_enforce("==", e))?;
 
-                let unique_namespace = cs.ns(|| format!("select array access {}", i));
                 let value =
-                    ConstrainedValue::conditionally_select(unique_namespace, &index_comparison, &item, &current_value)
+                    ConstrainedValue::conditionally_select(cs.ns(|| format!("select array access {}", i)), &index_comparison, &item, &current_value)
                         .map_err(|e| ValueError::cannot_enforce("conditional select", e))?;
                 current_value = value;
             }

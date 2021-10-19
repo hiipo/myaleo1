@@ -20,7 +20,7 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
     pub(super) fn evaluate_array_index_store<CS: ConstraintSystem<F>>(
         &mut self,
         instruction: &Instruction,
-        cs: &mut CS,
+        mut cs: CS,
     ) -> Result<()> {
         let (destination, values) = if let Instruction::ArrayIndexStore(QueryData { destination, values }) = instruction
         {
@@ -31,9 +31,9 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
 
         //todo: optimize array copies here
 
-        let index = self.resolve(values.get(0).unwrap(), cs)?.into_owned();
-        let target = self.resolve(values.get(1).unwrap(), cs)?.into_owned();
-        let array = self.resolve(&Value::Ref(*destination), cs)?.into_owned();
+        let index = self.resolve(values.get(0).unwrap(), cs.ns(|| "evaluate array index store index"))?.into_owned();
+        let target = self.resolve(values.get(1).unwrap(), cs.ns(|| "evaluate array index store target"))?.into_owned();
+        let array = self.resolve(&Value::Ref(*destination), cs.ns(|| "evaluate array index store array"))?.into_owned();
 
         let index_resolved = index
             .extract_integer()
@@ -52,20 +52,19 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
         } else if array.is_empty() {
             return Err(ArrayError::array_index_out_of_bounds(0, 0).into());
         } else {
-            let mut cs = self.cs(cs);
+            let mut cs = self.cs(&mut cs);
             {
                 let array_len: u32 = array
                     .len()
                     .try_into()
                     .map_err(|_| ArrayError::array_length_out_of_bounds())?;
-                Self::array_bounds_check(&mut cs, index_resolved, array_len)?;
+                Self::array_bounds_check(cs.ns(|| "evaluate array index store array bounds check"), index_resolved, array_len)?;
             }
 
             let array = array.clone();
             let mut out = Vec::with_capacity(array.len());
             for (i, item) in array.into_iter().enumerate() {
                 let namespace_string = format!("evaluate dyn array assignment eq {}", i);
-                let eq_namespace = cs.ns(|| namespace_string);
 
                 let i = match &index_resolved {
                     Integer::U8(_) => Integer::U8(UInt8::constant(
@@ -83,11 +82,10 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                     _ => return Err(ArrayError::invalid_index(index_resolved.get_type().to_string()).into()),
                 };
                 let index_comparison = index_resolved
-                    .evaluate_equal(eq_namespace, &i)
+                    .evaluate_equal(cs.ns(|| namespace_string), &i)
                     .map_err(|e| ValueError::cannot_enforce("==", e))?;
 
-                let unique_namespace = cs.ns(|| format!("select array dyn assignment {}", i));
-                let value = ConstrainedValue::conditionally_select(unique_namespace, &index_comparison, &target, &item)
+                let value = ConstrainedValue::conditionally_select(cs.ns(|| format!("select array dyn assignment {}", i)), &index_comparison, &target, &item)
                     .map_err(|e| ValueError::cannot_enforce("conditional select", e))?;
                 out.push(value);
             }
