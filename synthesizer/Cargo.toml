@@ -18,6 +18,7 @@ license = "GPL-3.0"
 edition = "2018"
 
 [dependencies.snarkvm-curves]
+path = "../curves"
 version = "0.7.9"
 default-features = false
 
@@ -25,13 +26,16 @@ default-features = false
 version = "1.0.0"
 
 [dependencies.snarkvm-fields]
+path = "../fields"
 version = "0.7.9"
 default-features = false
 
 [dependencies.snarkvm-gadgets]
+path = "../gadgets"
 version = "0.7.9"
 
 [dependencies.snarkvm-r1cs]
+path = "../r1cs"
 version = "0.7.9"
 default-features = false
 
