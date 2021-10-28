@@ -15,9 +15,8 @@
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod commitment;
-pub mod commitment_tree;
 pub mod crh;
-pub mod encoding;
+pub mod crypto_hash;
 pub mod encryption;
 pub mod merkle_tree;
 pub mod prf;

@@ -28,23 +28,24 @@ use crate::{
         eq::{ConditionalEqGadget, EqGadget},
         select::CondSelectGadget,
     },
+    ToBitsBEGadget,
 };
 
-pub trait CommitmentGadget<C: CommitmentScheme, F: Field> {
+pub trait CommitmentGadget<C: CommitmentScheme, F: Field>: AllocGadget<C, F> + Clone + Sized {
     type OutputGadget: ConditionalEqGadget<F>
         + CondSelectGadget<F>
         + EqGadget<F>
         + ToBytesGadget<F>
+        + ToBitsBEGadget<F>
         + AllocGadget<C::Output, F>
         + Clone
         + Sized
         + Debug;
-    type ParametersGadget: AllocGadget<C::Parameters, F> + Clone;
-    type RandomnessGadget: AllocGadget<C::Randomness, F> + Clone;
+    type RandomnessGadget: AllocGadget<C::Randomness, F> + ToBytesGadget<F> + Clone;
 
     fn check_commitment_gadget<CS: ConstraintSystem<F>>(
+        &self,
         cs: CS,
-        parameters: &Self::ParametersGadget,
         input: &[UInt8],
         r: &Self::RandomnessGadget,
     ) -> Result<Self::OutputGadget, SynthesisError>;

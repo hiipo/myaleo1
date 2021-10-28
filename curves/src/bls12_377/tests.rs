@@ -36,6 +36,7 @@ use crate::{
     templates::{short_weierstrass_jacobian::tests::sw_tests, twisted_edwards_extended::tests::edwards_test},
     traits::{
         tests_curve::curve_tests,
+        tests_field::{field_serialization_test, field_test, frobenius_test, primefield_test, sqrt_field_test},
         tests_group::group_test,
         AffineCurve,
         PairingEngine,
@@ -45,7 +46,6 @@ use crate::{
 };
 use snarkvm_fields::{
     fp6_3over2::Fp6Parameters,
-    tests_field::{field_serialization_test, field_test, frobenius_test, primefield_test, sqrt_field_test},
     FftField,
     FftParameters,
     Field,
@@ -626,36 +626,4 @@ fn test_bilinearity() {
     assert_eq!(ans1.pow(Fr::characteristic()), Fq12::one());
     assert_eq!(ans2.pow(Fr::characteristic()), Fq12::one());
     assert_eq!(ans3.pow(Fr::characteristic()), Fq12::one());
-}
-
-#[test]
-fn test_g1_generator_raw() {
-    let mut x = Fq::zero();
-    let mut i = 0;
-    loop {
-        // y^2 = x^3 + b
-        let mut rhs = x;
-        rhs.square_in_place();
-        rhs.mul_assign(&x);
-        rhs.add_assign(Bls12_377G1Parameters::COEFF_B);
-
-        if let Some(y) = rhs.sqrt() {
-            let p = G1Affine::new(x, if y < -y { y } else { -y }, false);
-            assert!(!p.is_in_correct_subgroup_assuming_on_curve());
-
-            let g1 = p.scale_by_cofactor();
-            if !g1.is_zero() {
-                assert_eq!(i, 1);
-                let g1 = G1Affine::from(g1);
-
-                assert!(g1.is_in_correct_subgroup_assuming_on_curve());
-
-                assert_eq!(g1, G1Affine::prime_subgroup_generator());
-                break;
-            }
-        }
-
-        i += 1;
-        x.add_assign(Fq::one());
-    }
 }

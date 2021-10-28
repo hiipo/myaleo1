@@ -16,7 +16,9 @@
 
 use snarkvm_algorithms::SNARKError;
 
-use std::fmt::Debug;
+use core::fmt::Debug;
+
+use crate::{ahp::AHPError, fiat_shamir::FiatShamirError};
 
 /// A `enum` specifying the possible failure modes of `Marlin`.
 #[derive(Debug)]
@@ -24,9 +26,9 @@ pub enum MarlinError {
     /// The index is too large for the universal public parameters.
     IndexTooLarge(usize, usize),
     /// There was an error in the underlying holographic IOP.
-    AHPError(crate::ahp::AHPError),
+    AHPError(AHPError),
     /// There was an error in Fiat-Shamir.
-    FiatShamirError(crate::fiat_shamir::FiatShamirError),
+    FiatShamirError(FiatShamirError),
     /// There was a synthesis error.
     R1CSError(snarkvm_r1cs::SynthesisError),
     /// There was an error in the underlying polynomial commitment.
@@ -34,14 +36,14 @@ pub enum MarlinError {
     Terminated,
 }
 
-impl From<crate::ahp::AHPError> for MarlinError {
-    fn from(err: crate::ahp::AHPError) -> Self {
+impl From<AHPError> for MarlinError {
+    fn from(err: AHPError) -> Self {
         MarlinError::AHPError(err)
     }
 }
 
-impl From<crate::fiat_shamir::FiatShamirError> for MarlinError {
-    fn from(err: crate::fiat_shamir::FiatShamirError) -> Self {
+impl From<FiatShamirError> for MarlinError {
+    fn from(err: FiatShamirError) -> Self {
         MarlinError::FiatShamirError(err)
     }
 }
@@ -57,15 +59,6 @@ impl From<snarkvm_polycommit::Error> for MarlinError {
         match err {
             snarkvm_polycommit::Error::Terminated => MarlinError::Terminated,
             err => MarlinError::PolynomialCommitmentError(err),
-        }
-    }
-}
-
-impl MarlinError {
-    pub fn into_snark_error(&self, prefix: &str) -> SNARKError {
-        match self {
-            MarlinError::Terminated => SNARKError::Terminated,
-            err => SNARKError::Crate("marlin", format!("{} - {:?}", prefix, err)),
         }
     }
 }

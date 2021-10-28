@@ -14,11 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod group;
-pub use group::*;
-
-pub mod group_parameters;
-pub use group_parameters::*;
+pub mod ecies_poseidon;
+pub use ecies_poseidon::*;
 
 #[cfg(test)]
 pub mod tests;

@@ -33,8 +33,8 @@ path = "benches/crh/pedersen.rs"
 harness = false
 
 [[bench]]
-name = "crh-bowe-pedersen"
-path = "benches/crh/bowe_pedersen.rs"
+name = "crh-bhp"
+path = "benches/crh/bhp.rs"
 harness = false
 
 [[bench]]
@@ -43,23 +43,28 @@ path = "benches/fft/fft.rs"
 harness = false
 
 [[bench]]
-name = "prf-blake2s"
-path = "benches/prf/blake2s.rs"
+name = "hash_to_curve"
+path = "benches/hash_to_curve/hash_to_curve.rs"
 harness = false
 
 [[bench]]
-name = "signature-schnorr"
-path = "benches/signature/schnorr.rs"
+name = "prf"
+path = "benches/prf/poseidon.rs"
 harness = false
 
 [[bench]]
-name = "snark-gm17"
-path = "benches/snark/gm17.rs"
+name = "signature-aleo"
+path = "benches/signature/aleo.rs"
+harness = false
+
+[[bench]]
+name = "snark-groth16"
+path = "benches/snark/groth16.rs"
 harness = false
 
 [[example]]
-name = "gm17"
-path = "examples/snark/gm17.rs"
+name = "groth16"
+path = "examples/snark/groth16.rs"
 
 [dependencies.snarkvm-curves]
 path = "../curves"
@@ -93,17 +98,42 @@ version = "1.0"
 version = "0.9"
 optional = true
 
+[dependencies.blake2s_simd]
+version = "0.5"
+
+[dependencies.crossbeam-channel]
+version = "0.5"
+
+[dependencies.cuda-oxide]
+version = "0.3"
+optional = true
+
 [dependencies.derivative]
 version = "2"
 
 [dependencies.digest]
 version = "0.9"
 
+[dependencies.hex]
+version = "0.4.3"
+
 [dependencies.itertools]
 version = "0.10.1"
 
+[dependencies.lazy_static]
+version = "1.4"
+
+[dependencies.once_cell]
+version = "1.8"
+
 [dependencies.rand]
 version = "0.8"
+
+[dependencies.getrandom]
+version = "0.2"
+optional = true
+features = [ "js" ]
+default-features = false
 
 [dependencies.rand_chacha]
 version = "0.3"
@@ -112,31 +142,20 @@ default-features = false
 [dependencies.rayon]
 version = "1"
 
+[dependencies.serde]
+version = "1.0"
+default-features = false
+features = ["derive"]
+
 [dependencies.sha2]
 version = "0.9"
 default-features = false
 
-[dependencies.smallvec]
-version = "1.6"
-
-[dependencies.cuda-oxide]
-version = "0.3"
-optional = true
-
-[dependencies.lazy_static]
-version = "1.4"
-
-[dependencies.crossbeam-channel]
-version = "0.5"
-
 [dependencies.thiserror]
 version = "1.0"
 
-[dependencies.bitvec]
-version = "0.19.4"
-
-[dependencies.once_cell]
-version = "1.8"
+[dev-dependencies.bincode]
+version = "1"
 
 [dev-dependencies.criterion]
 version = "0.3.5"
@@ -144,8 +163,18 @@ version = "0.3.5"
 [dev-dependencies.csv]
 version = "1"
 
+[dev-dependencies.hex]
+version = "0.4"
+
 [dev-dependencies.rand_xorshift]
 version = "0.3"
+
+[dev-dependencies.serde]
+version = "1"
+features = ["derive"]
+
+[dev-dependencies.serde_json]
+version = "1"
 
 [features]
 default = [
@@ -158,11 +187,10 @@ default = [
 ]
 full = [
   "commitment",
-  "commitment_tree",
   "crh",
-  "encoding",
   "encryption",
   "fft",
+  "hash_to_curve",
   "merkle_tree",
   "msm",
   "prf",
@@ -171,27 +199,28 @@ full = [
 ]
 wasm = [
   "commitment",
-  "commitment_tree",
   "crh",
-  "encoding",
+  "crypto_hash",
   "encryption",
   "fft",
+  "hash_to_curve",
   "merkle_tree",
   "msm",
   "prf",
   "signature",
-  "snark"
+  "snark",
+  "getrandom"
 ]
-commitment = [ "blake2", "crh" ]
-commitment_tree = [ ]
+commitment = [ "crh" ]
 crh = [ ]
-encoding = [ ]
+crypto_hash = [ "blake2" ]
 encryption = [ "signature" ]
 fft = [ ]
+hash_to_curve = [ ]
 merkle_tree = [ ]
 msm = [ ]
-prf = [ "blake2" ]
-signature = [ "encryption" ]
+prf = [ ]
+signature = [ "encryption", "crypto_hash" ]
 snark = [ "fft", "msm" ]
 parallel = [ ]
 print-trace = [ "snarkvm-profiler/print-trace" ]

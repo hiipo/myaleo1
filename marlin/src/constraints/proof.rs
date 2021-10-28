@@ -18,19 +18,13 @@ use core::borrow::Borrow;
 
 use hashbrown::HashMap;
 
-use snarkvm_fields::{PrimeField, ToConstraintField};
-use snarkvm_gadgets::{
-    nonnative::NonNativeFieldVar,
-    traits::{
-        alloc::{AllocBytesGadget, AllocGadget},
-        fields::ToConstraintFieldGadget,
-    },
-};
+use snarkvm_fields::PrimeField;
+use snarkvm_gadgets::{nonnative::NonNativeFieldVar, traits::alloc::AllocGadget, AllocBytesGadget};
 use snarkvm_polycommit::PCCheckVar;
 use snarkvm_r1cs::{ConstraintSystem, SynthesisError};
-use snarkvm_utilities::FromBytes;
 
-use crate::{marlin::Proof, PolynomialCommitment};
+use crate::{marlin::Proof, PolynomialCommitment, String, ToString, Vec};
+use snarkvm_utilities::FromBytes;
 
 /// The prover message gadget
 #[repr(transparent)]
@@ -51,7 +45,7 @@ impl<TargetField: PrimeField, BaseField: PrimeField> Clone for ProverMessageVar<
 pub struct ProofVar<
     TargetField: PrimeField,
     BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
+    PC: PolynomialCommitment<TargetField, BaseField>,
     PCG: PCCheckVar<TargetField, PC, BaseField>,
 > {
     /// The commitments
@@ -67,7 +61,7 @@ pub struct ProofVar<
 impl<
     TargetField: PrimeField,
     BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
+    PC: PolynomialCommitment<TargetField, BaseField>,
     PCG: PCCheckVar<TargetField, PC, BaseField>,
 > Clone for ProofVar<TargetField, BaseField, PC, PCG>
 {
@@ -84,7 +78,7 @@ impl<
 impl<
     TargetField: PrimeField,
     BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
+    PC: PolynomialCommitment<TargetField, BaseField>,
     PCG: PCCheckVar<TargetField, PC, BaseField>,
 > ProofVar<TargetField, BaseField, PC, PCG>
 {
@@ -104,23 +98,19 @@ impl<
     }
 }
 
-impl<TargetField, BaseField, PC, PCG> AllocGadget<Proof<TargetField, PC>, BaseField>
+impl<TargetField, BaseField, PC, PCG> AllocGadget<Proof<TargetField, BaseField, PC>, BaseField>
     for ProofVar<TargetField, BaseField, PC, PCG>
 where
     TargetField: PrimeField,
     BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
+    PC: PolynomialCommitment<TargetField, BaseField>,
     PCG: PCCheckVar<TargetField, PC, BaseField>,
-    PC::VerifierKey: ToConstraintField<BaseField>,
-    PC::Commitment: ToConstraintField<BaseField>,
-    PCG::VerifierKeyVar: ToConstraintFieldGadget<BaseField>,
-    PCG::CommitmentVar: ToConstraintFieldGadget<BaseField>,
 {
     #[inline]
     fn alloc_constant<FN, T, CS: ConstraintSystem<BaseField>>(mut cs: CS, value_gen: FN) -> Result<Self, SynthesisError>
     where
         FN: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<Proof<TargetField, PC>>,
+        T: Borrow<Proof<TargetField, BaseField, PC>>,
     {
         let tmp = value_gen()?;
         let Proof {
@@ -177,10 +167,7 @@ where
 
         let mut evaluation_gadgets = HashMap::<String, NonNativeFieldVar<TargetField, BaseField>>::new();
 
-        const ALL_POLYNOMIALS: [&str; 10] = [
-            "a_denom",
-            "b_denom",
-            "c_denom",
+        const ALL_POLYNOMIALS: [&str; 7] = [
             "g_1",
             "g_2",
             "t",
@@ -206,7 +193,7 @@ where
     fn alloc<FN, T, CS: ConstraintSystem<BaseField>>(mut cs: CS, value_gen: FN) -> Result<Self, SynthesisError>
     where
         FN: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<Proof<TargetField, PC>>,
+        T: Borrow<Proof<TargetField, BaseField, PC>>,
     {
         let tmp = value_gen()?;
         let Proof {
@@ -260,10 +247,7 @@ where
 
         let mut evaluation_gadgets = HashMap::<String, NonNativeFieldVar<TargetField, BaseField>>::new();
 
-        const ALL_POLYNOMIALS: [&str; 10] = [
-            "a_denom",
-            "b_denom",
-            "c_denom",
+        const ALL_POLYNOMIALS: [&str; 7] = [
             "g_1",
             "g_2",
             "t",
@@ -289,7 +273,7 @@ where
     fn alloc_input<FN, T, CS: ConstraintSystem<BaseField>>(mut cs: CS, value_gen: FN) -> Result<Self, SynthesisError>
     where
         FN: FnOnce() -> Result<T, SynthesisError>,
-        T: Borrow<Proof<TargetField, PC>>,
+        T: Borrow<Proof<TargetField, BaseField, PC>>,
     {
         let tmp = value_gen()?;
         let Proof {
@@ -345,10 +329,7 @@ where
 
         let mut evaluation_gadgets = HashMap::<String, NonNativeFieldVar<TargetField, BaseField>>::new();
 
-        const ALL_POLYNOMIALS: [&str; 10] = [
-            "a_denom",
-            "b_denom",
-            "c_denom",
+        const ALL_POLYNOMIALS: [&str; 7] = [
             "g_1",
             "g_2",
             "t",
@@ -375,12 +356,8 @@ impl<TargetField, BaseField, PC, PCG> AllocBytesGadget<Vec<u8>, BaseField> for P
 where
     TargetField: PrimeField,
     BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
+    PC: PolynomialCommitment<TargetField, BaseField>,
     PCG: PCCheckVar<TargetField, PC, BaseField>,
-    PC::VerifierKey: ToConstraintField<BaseField>,
-    PC::Commitment: ToConstraintField<BaseField>,
-    PCG::VerifierKeyVar: ToConstraintFieldGadget<BaseField>,
-    PCG::CommitmentVar: ToConstraintFieldGadget<BaseField>,
 {
     #[inline]
     fn alloc_bytes<FN, T, CS: ConstraintSystem<BaseField>>(mut cs: CS, value_gen: FN) -> Result<Self, SynthesisError>
@@ -389,7 +366,7 @@ where
         T: Borrow<Vec<u8>>,
     {
         value_gen().and_then(|proof_bytes| {
-            let proof: Proof<TargetField, PC> = FromBytes::read_le(&proof_bytes.borrow()[..])?;
+            let proof: Proof<TargetField, BaseField, PC> = FromBytes::read_le(&proof_bytes.borrow()[..])?;
 
             Self::alloc(cs.ns(|| "alloc_bytes"), || Ok(proof))
         })
@@ -405,7 +382,7 @@ where
         T: Borrow<Vec<u8>>,
     {
         value_gen().and_then(|proof_bytes| {
-            let proof: Proof<TargetField, PC> = FromBytes::read_le(&proof_bytes.borrow()[..])?;
+            let proof: Proof<TargetField, BaseField, PC> = FromBytes::read_le(&proof_bytes.borrow()[..])?;
 
             Self::alloc_input(cs.ns(|| "alloc_input_bytes"), || Ok(proof))
         })

@@ -14,13 +14,16 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::Arc;
-
 use crate::{
     errors::MerkleError,
     traits::{MerkleParameters, CRH},
 };
-use snarkvm_utilities::ToBytes;
+use snarkvm_utilities::{FromBytes, ToBytes};
+
+use std::{
+    io::{Read, Result as IoResult, Write},
+    sync::Arc,
+};
 
 pub type MerkleTreeDigest<P> = <<P as MerkleParameters>::H as CRH>::Output;
 
@@ -29,39 +32,31 @@ pub type MerkleTreeDigest<P> = <<P as MerkleParameters>::H as CRH>::Output;
 #[derive(Clone, Debug)]
 pub struct MerklePath<P: MerkleParameters> {
     pub parameters: Arc<P>,
-    pub path: Vec<(MerkleTreeDigest<P>, MerkleTreeDigest<P>)>,
+    pub path: Vec<MerkleTreeDigest<P>>,
+    pub leaf_index: u64,
 }
 
 impl<P: MerkleParameters> MerklePath<P> {
     pub fn verify<L: ToBytes>(&self, root_hash: &MerkleTreeDigest<P>, leaf: &L) -> Result<bool, MerkleError> {
-        if self.path.len() != P::DEPTH {
-            return Ok(false);
-        }
-
         // Check that the given leaf matches the leaf in the membership proof.
         if !self.path.is_empty() {
-            let hash_input_size_in_bytes = (P::H::INPUT_SIZE_BITS / 8) * 2;
-            let mut buffer = vec![0u8; hash_input_size_in_bytes];
+            let claimed_leaf_hash = self.parameters.hash_leaf::<L>(leaf)?;
 
-            let claimed_leaf_hash = self.parameters.hash_leaf::<L>(leaf, &mut buffer)?;
-
-            // Check if leaf is one of the bottom-most siblings.
-            if claimed_leaf_hash != self.path[0].0 && claimed_leaf_hash != self.path[0].1 {
-                return Ok(false);
-            };
+            let mut index = self.leaf_index;
+            let mut curr_path_node = claimed_leaf_hash;
 
             // Check levels between leaf level and root.
-            let mut previous_hash = claimed_leaf_hash;
-            let mut buffer = vec![0u8; hash_input_size_in_bytes];
-            for &(ref hash, ref sibling_hash) in &self.path {
-                // Check if the previous hash matches the correct current hash.
-                if &previous_hash != hash && &previous_hash != sibling_hash {
-                    return Ok(false);
-                };
-                previous_hash = self.parameters.hash_inner_node(hash, sibling_hash, &mut buffer)?;
+            for level in 0..self.path.len() {
+                // Check if path node at this level is left or right.
+                let (left_bytes, right_bytes) =
+                    Self::select_left_right_bytes(index, &curr_path_node, &self.path[level])?;
+                // Update the current path node.
+                curr_path_node = self.parameters.hash_inner_node(&left_bytes, &right_bytes)?;
+                index >>= 1;
             }
 
-            if root_hash != &previous_hash {
+            // Check if final hash is root
+            if &curr_path_node != root_hash {
                 return Ok(false);
             }
 
@@ -70,17 +65,100 @@ impl<P: MerkleParameters> MerklePath<P> {
             Ok(false)
         }
     }
+
+    /// Convert `computed_hash` and `sibling_hash` to bytes. `index` is the first `path.len()` bits of
+    /// the position of tree.
+    ///
+    /// If the least significant bit of `index` is 0, then `input_1` will be left and `input_2` will be right.
+    /// Otherwise, `input_1` will be right and `input_2` will be left.
+    ///
+    /// Returns: (left, right)
+    fn select_left_right_bytes(
+        index: u64,
+        computed_hash: &<P::H as CRH>::Output,
+        sibling_hash: &<P::H as CRH>::Output,
+    ) -> Result<(<P::H as CRH>::Output, <P::H as CRH>::Output), MerkleError> {
+        let is_left = index & 1 == 0;
+        let mut left_bytes = computed_hash;
+        let mut right_bytes = sibling_hash;
+        if !is_left {
+            core::mem::swap(&mut left_bytes, &mut right_bytes);
+        }
+        Ok((*left_bytes, *right_bytes))
+    }
+
+    /// The position of on_path node in `leaf_and_sibling_hash` and `non_leaf_and_sibling_hash_path`.
+    /// `position[i]` is 0 (false) iff `i`th on-path node from top to bottom is on the left.
+    ///
+    /// This function simply converts `self.leaf_index` to boolean array in big endian form.
+    pub fn position_list(&self) -> impl Iterator<Item = bool> + '_ {
+        (0..self.path.len()).map(move |i| ((self.leaf_index >> i) & 1) != 0)
+    }
 }
 
+impl<P: MerkleParameters> FromBytes for MerklePath<P> {
+    #[inline]
+    fn read_le<R: Read>(mut reader: R) -> IoResult<Self> {
+        // TODO (howardwu): TEMPORARY - This is a temporary fix to support ToBytes/FromBytes for
+        //  LedgerProof and LocalProof. While it is "safe", it is not performant to deserialize
+        //  in such a manual fashion. However, given the extent to which modifying the architecture
+        //  of Merkle trees in snarkVM impacts many APIs downstream, this forward-compatible change
+        //  is being introduced until a proper refactor can be discussed and implemented.
+        //  If you are seeing this message, please be proactive in bringing it up :)
+        let parameters = {
+            let setup_message_length: u64 = FromBytes::read_le(&mut reader)?;
+
+            let mut setup_message_bytes = vec![0u8; setup_message_length as usize];
+            reader.read_exact(&mut setup_message_bytes)?;
+            let setup_message =
+                String::from_utf8(setup_message_bytes).expect("Failed to parse setup message for Merkle parameters");
+
+            Arc::new(P::setup(&setup_message))
+        };
+
+        let path_length: u64 = FromBytes::read_le(&mut reader)?;
+        let mut path = Vec::with_capacity(path_length as usize);
+        for _ in 0..path_length {
+            path.push(FromBytes::read_le(&mut reader)?);
+        }
+
+        let leaf_index: u64 = FromBytes::read_le(&mut reader)?;
+
+        Ok(Self {
+            parameters,
+            path,
+            leaf_index,
+        })
+    }
+}
+
+impl<P: MerkleParameters> ToBytes for MerklePath<P> {
+    #[inline]
+    fn write_le<W: Write>(&self, mut writer: W) -> IoResult<()> {
+        let setup_message_bytes: &[u8] = self.parameters.setup_message().as_bytes();
+        let setup_message_length: u64 = setup_message_bytes.len() as u64;
+
+        setup_message_length.write_le(&mut writer)?;
+        setup_message_bytes.write_le(&mut writer)?;
+
+        (self.path.len() as u64).write_le(&mut writer)?;
+        self.path.write_le(&mut writer)?;
+
+        self.leaf_index.write_le(&mut writer)
+    }
+}
+
+// TODO (howardwu): TEMPORARY - Deprecate this with a ledger rearchitecture.
 impl<P: MerkleParameters> Default for MerklePath<P> {
     fn default() -> Self {
         let mut path = Vec::with_capacity(P::DEPTH);
         for _i in 0..P::DEPTH {
-            path.push((MerkleTreeDigest::<P>::default(), MerkleTreeDigest::<P>::default()));
+            path.push(MerkleTreeDigest::<P>::default());
         }
         Self {
-            parameters: Arc::new(P::default()),
+            parameters: Arc::new(P::setup("unsafe")),
             path,
+            leaf_index: 0,
         }
     }
 }

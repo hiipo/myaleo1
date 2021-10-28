@@ -14,63 +14,46 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::errors::SignatureError;
-use snarkvm_utilities::{
-    serialize::{CanonicalDeserialize, CanonicalSerialize},
-    FromBytes,
-    ToBytes,
-};
+use snarkvm_utilities::{FromBytes, ToBytes};
 
-use rand::Rng;
+use anyhow::Result;
+use rand::{CryptoRng, Rng};
 use std::{fmt::Debug, hash::Hash};
 
-pub trait SignatureScheme: Sized + Clone + From<<Self as SignatureScheme>::Parameters> {
-    type Parameters: Clone + Debug + ToBytes + FromBytes + Eq + Send + Sync;
-    type PublicKey: Clone
-        + Debug
-        + Default
-        + ToBytes
-        + FromBytes
-        + Hash
-        + Eq
-        + Send
-        + Sync
-        + CanonicalSerialize
-        + CanonicalDeserialize;
+pub trait SignatureScheme:
+    Sized + ToBytes + FromBytes + Debug + Clone + Eq + Send + Sync + From<<Self as SignatureScheme>::Parameters>
+{
+    type Parameters: Clone + Debug + Eq;
+    type PublicKey: Clone + Debug + Default + ToBytes + FromBytes + Hash + Eq + Send + Sync;
     type PrivateKey: Clone + Debug + Default + ToBytes + FromBytes + PartialEq + Eq;
     type Signature: Clone + Debug + Default + ToBytes + FromBytes + Send + Sync + PartialEq + Eq;
 
-    fn setup<R: Rng>(rng: &mut R) -> Result<Self, SignatureError>;
+    fn setup(message: &str) -> Self;
 
     fn parameters(&self) -> &Self::Parameters;
 
-    fn generate_private_key<R: Rng>(&self, rng: &mut R) -> Result<Self::PrivateKey, SignatureError>;
+    fn generate_private_key<R: Rng + CryptoRng>(&self, rng: &mut R) -> Self::PrivateKey;
 
-    fn generate_public_key(&self, private_key: &Self::PrivateKey) -> Result<Self::PublicKey, SignatureError>;
+    fn generate_public_key(&self, private_key: &Self::PrivateKey) -> Self::PublicKey;
 
-    fn sign<R: Rng>(
+    fn sign<R: Rng + CryptoRng>(
         &self,
         private_key: &Self::PrivateKey,
         message: &[u8],
         rng: &mut R,
-    ) -> Result<Self::Signature, SignatureError>;
+    ) -> Result<Self::Signature>;
 
-    fn verify(
-        &self,
-        public_key: &Self::PublicKey,
-        message: &[u8],
-        signature: &Self::Signature,
-    ) -> Result<bool, SignatureError>;
+    fn verify(&self, public_key: &Self::PublicKey, message: &[u8], signature: &Self::Signature) -> Result<bool>;
+}
 
-    fn randomize_public_key(
-        &self,
-        public_key: &Self::PublicKey,
-        randomness: &[u8],
-    ) -> Result<Self::PublicKey, SignatureError>;
+pub trait SignatureSchemeOperations {
+    type AffineCurve: Clone + Debug + Default + ToBytes + FromBytes + Hash + Eq + Send + Sync;
+    type BaseField: Clone + Debug + Default + ToBytes + FromBytes + PartialEq + Eq;
+    type ScalarField: Clone + Debug + Default + ToBytes + FromBytes + PartialEq + Eq;
+    type Signature: Clone + Debug + Default + ToBytes + FromBytes + PartialEq + Eq;
 
-    fn randomize_signature(
-        &self,
-        signature: &Self::Signature,
-        randomness: &[u8],
-    ) -> Result<Self::Signature, SignatureError>;
+    fn pk_sig(signature: &Self::Signature) -> Result<Self::AffineCurve>;
+    fn pr_sig(signature: &Self::Signature) -> Result<Self::AffineCurve>;
+    fn g_scalar_multiply(&self, scalar: &Self::ScalarField) -> Self::AffineCurve;
+    fn hash_to_scalar_field(&self, input: &[Self::BaseField]) -> Self::ScalarField;
 }

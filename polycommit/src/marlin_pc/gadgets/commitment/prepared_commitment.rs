@@ -17,18 +17,10 @@
 use core::borrow::Borrow;
 
 use snarkvm_curves::PairingEngine;
-use snarkvm_fields::{PrimeField, ToConstraintField};
-use snarkvm_gadgets::traits::{
-    alloc::AllocGadget,
-    curves::{GroupGadget, PairingGadget},
-};
+use snarkvm_gadgets::traits::{alloc::AllocGadget, curves::PairingGadget};
 use snarkvm_r1cs::{ConstraintSystem, SynthesisError};
 
-use crate::{
-    marlin_pc::{CommitmentVar, PreparedCommitment},
-    PrepareGadget,
-    Vec,
-};
+use crate::{marlin_pc::PreparedCommitment, Vec};
 
 /// Prepared gadget for an optionally hiding Marlin-KZG10 commitment.
 /// shifted_comm is not prepared, due to the specific use case.
@@ -36,10 +28,7 @@ pub struct PreparedCommitmentVar<
     TargetCurve: PairingEngine,
     BaseCurve: PairingEngine,
     PG: PairingGadget<TargetCurve, <BaseCurve as PairingEngine>::Fr>,
-> where
-    <TargetCurve as PairingEngine>::G1Affine: ToConstraintField<<BaseCurve as PairingEngine>::Fr>,
-    <TargetCurve as PairingEngine>::G2Affine: ToConstraintField<<BaseCurve as PairingEngine>::Fr>,
-{
+> {
     /// Prepared commitment.
     pub prepared_comm: Vec<PG::G1Gadget>,
     /// Shifted commitment.
@@ -51,8 +40,6 @@ where
     TargetCurve: PairingEngine,
     BaseCurve: PairingEngine,
     PG: PairingGadget<TargetCurve, <BaseCurve as PairingEngine>::Fr>,
-    <TargetCurve as PairingEngine>::G1Affine: ToConstraintField<<BaseCurve as PairingEngine>::Fr>,
-    <TargetCurve as PairingEngine>::G2Affine: ToConstraintField<<BaseCurve as PairingEngine>::Fr>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -62,44 +49,12 @@ where
     }
 }
 
-impl<TargetCurve, BaseCurve, PG>
-    PrepareGadget<CommitmentVar<TargetCurve, BaseCurve, PG>, <BaseCurve as PairingEngine>::Fr>
-    for PreparedCommitmentVar<TargetCurve, BaseCurve, PG>
-where
-    TargetCurve: PairingEngine,
-    BaseCurve: PairingEngine,
-    PG: PairingGadget<TargetCurve, <BaseCurve as PairingEngine>::Fr>,
-    <TargetCurve as PairingEngine>::G1Affine: ToConstraintField<<BaseCurve as PairingEngine>::Fr>,
-    <TargetCurve as PairingEngine>::G2Affine: ToConstraintField<<BaseCurve as PairingEngine>::Fr>,
-{
-    fn prepare<CS: ConstraintSystem<<BaseCurve as PairingEngine>::Fr>>(
-        mut cs: CS,
-        unprepared: &CommitmentVar<TargetCurve, BaseCurve, PG>,
-    ) -> Result<Self, SynthesisError> {
-        let mut prepared_comm = Vec::<PG::G1Gadget>::new();
-        let supported_bits = <<TargetCurve as PairingEngine>::Fr as PrimeField>::size_in_bits();
-
-        let mut cur: PG::G1Gadget = unprepared.comm.clone();
-        for i in 0..supported_bits {
-            prepared_comm.push(cur.clone());
-            cur.double_in_place(cs.ns(|| format!("cur_double_in_place_{}", i)))?;
-        }
-
-        Ok(Self {
-            prepared_comm,
-            shifted_comm: unprepared.shifted_comm.clone(),
-        })
-    }
-}
-
 impl<TargetCurve, BaseCurve, PG> AllocGadget<PreparedCommitment<TargetCurve>, <BaseCurve as PairingEngine>::Fr>
     for PreparedCommitmentVar<TargetCurve, BaseCurve, PG>
 where
     TargetCurve: PairingEngine,
     BaseCurve: PairingEngine,
     PG: PairingGadget<TargetCurve, <BaseCurve as PairingEngine>::Fr>,
-    <TargetCurve as PairingEngine>::G1Affine: ToConstraintField<<BaseCurve as PairingEngine>::Fr>,
-    <TargetCurve as PairingEngine>::G2Affine: ToConstraintField<<BaseCurve as PairingEngine>::Fr>,
 {
     fn alloc_constant<
         Fn: FnOnce() -> Result<T, SynthesisError>,

@@ -25,6 +25,7 @@ use crate::{
         fields::ToConstraintFieldGadget,
         select::CondSelectGadget,
     },
+    FieldGadget,
 };
 use snarkvm_fields::{Field, FieldParameters, PrimeField};
 use snarkvm_r1cs::{
@@ -780,6 +781,27 @@ impl Boolean {
 
         Ok(current_run)
     }
+
+    /// Convert a little-endian bitwise representation of a field element to `FpGadget<F>`
+    pub fn le_bits_to_fp_var<CS: ConstraintSystem<F>, F: PrimeField>(
+        mut cs: CS,
+        bits: &[Self],
+    ) -> Result<FpGadget<F>, SynthesisError> {
+        assert!(bits.len() <= F::Parameters::CAPACITY as usize);
+
+        let mut value = FpGadget::<F>::zero(cs.ns(|| "zero"))?;
+
+        let mut power = F::one();
+        for (i, bit) in bits.iter().enumerate() {
+            let fp_bit = FpGadget::<F>::from_boolean(cs.ns(|| format!("convert from boolean {}", i)), *bit)?;
+            let fp_bit_times_power = fp_bit.mul_by_constant(cs.ns(|| format!("multiply by power {}", i)), &power)?;
+            value.add_in_place(cs.ns(|| format!("sum {}", i)), &fp_bit_times_power)?;
+
+            power.double_in_place();
+        }
+
+        Ok(value)
+    }
 }
 
 impl<F: Field> Xor<F> for Boolean {
@@ -830,6 +852,14 @@ impl<F: PrimeField> EvaluateEqGadget<F> for Boolean {
 }
 
 impl<F: Field> AllocGadget<bool, F> for Boolean {
+    fn alloc_constant<Fn, T, CS: ConstraintSystem<F>>(_cs: CS, value_gen: Fn) -> Result<Self, SynthesisError>
+    where
+        Fn: FnOnce() -> Result<T, SynthesisError>,
+        T: Borrow<bool>,
+    {
+        Ok(Boolean::Constant(*value_gen()?.borrow()))
+    }
+
     fn alloc<Fn, T, CS: ConstraintSystem<F>>(cs: CS, value_gen: Fn) -> Result<Self, SynthesisError>
     where
         Fn: FnOnce() -> Result<T, SynthesisError>,
@@ -962,6 +992,27 @@ impl<F: PrimeField> ToConstraintFieldGadget<F> for Boolean {
     fn to_constraint_field<CS: ConstraintSystem<F>>(&self, mut cs: CS) -> Result<Vec<FpGadget<F>>, SynthesisError> {
         let var = FpGadget::from_boolean(cs.ns(|| "fp_from_boolean"), self.clone())?;
         Ok(vec![var])
+    }
+}
+
+impl<F: PrimeField> ToConstraintFieldGadget<F> for [Boolean] {
+    fn to_constraint_field<CS: ConstraintSystem<F>>(&self, mut cs: CS) -> Result<Vec<FpGadget<F>>, SynthesisError> {
+        let capacity = <F::Parameters as FieldParameters>::CAPACITY as usize;
+
+        let mut res = Vec::with_capacity((self.len() + capacity - 1) / capacity);
+        for (i, booleans) in self.chunks(capacity).enumerate() {
+            res.push(Boolean::le_bits_to_fp_var(
+                cs.ns(|| format!("combine {}", i)),
+                booleans,
+            )?);
+        }
+        Ok(res)
+    }
+}
+
+impl<F: PrimeField> ToConstraintFieldGadget<F> for Vec<Boolean> {
+    fn to_constraint_field<CS: ConstraintSystem<F>>(&self, cs: CS) -> Result<Vec<FpGadget<F>>, SynthesisError> {
+        self.as_slice().to_constraint_field(cs)
     }
 }
 

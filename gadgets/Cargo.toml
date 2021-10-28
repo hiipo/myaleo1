@@ -47,6 +47,9 @@ path = "../utilities"
 version = "0.7.9"
 default-features = false
 
+[dependencies.anyhow]
+version = "1.0.43"
+
 [dependencies.derivative]
 version = "2"
 
@@ -57,7 +60,7 @@ version = "0.9"
 version = "0.10.1"
 
 [dependencies.num-bigint]
-version = "0.4.0"
+version = "0.4.2"
 default-features = false
 optional = true
 
@@ -101,7 +104,7 @@ default = [
   "snarkvm-curves/default",
   "snarkvm-fields/default",
   "snarkvm-r1cs/default",
-  "snarkvm-utilities/default"
+  "snarkvm-utilities/default",
 ]
 full = [ "algorithms", "curves", "nonnative" ]
 algorithms = [ ]

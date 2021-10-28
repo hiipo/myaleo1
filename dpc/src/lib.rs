@@ -54,10 +54,6 @@
 #![cfg_attr(feature = "clippy", allow(many_single_char_names))]
 #![cfg_attr(feature = "clippy", allow(new_without_default_derive))]
 
-#[cfg(feature = "testnet1")]
-#[macro_use]
-extern crate snarkvm_profiler;
-
 #[macro_use]
 extern crate derivative;
 
@@ -70,18 +66,46 @@ pub use account::*;
 pub mod block;
 pub use block::*;
 
-#[cfg(feature = "testnet1")]
-pub mod testnet1;
-
-#[cfg(feature = "testnet2")]
-pub mod testnet2;
+pub mod circuits;
+pub use circuits::*;
 
 pub mod errors;
 pub use errors::*;
 
+pub mod ledger;
+pub use ledger::*;
+
+pub mod network;
+pub use network::*;
+
+pub mod posw;
+pub use posw::*;
+
+pub mod record;
+pub use record::*;
+
 pub mod traits;
 pub use traits::*;
 
+pub mod transaction;
+pub use transaction::*;
+
+pub mod transition;
+pub use transition::*;
+
+pub mod virtual_machine;
+pub use virtual_machine::*;
+
 pub mod prelude {
-    pub use crate::{account::*, block::*, errors::*, traits::*};
+    pub use crate::{
+        account::*,
+        block::*,
+        errors::*,
+        ledger::*,
+        record::*,
+        traits::*,
+        transaction::*,
+        transition::*,
+        virtual_machine::*,
+    };
 }

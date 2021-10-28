@@ -20,9 +20,6 @@ pub use commitment::*;
 pub mod crh;
 pub use crh::*;
 
-pub mod encoding;
-pub use encoding::*;
-
 pub mod encryption;
 pub use encryption::*;
 

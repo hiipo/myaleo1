@@ -14,22 +14,22 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::errors::AccountError;
-use snarkvm_algorithms::traits::{CommitmentScheme, EncryptionScheme, SignatureScheme};
-
 use rand::{CryptoRng, Rng};
 
 pub trait AccountScheme: Sized {
-    type Address: Default;
+    type Address: Copy + Clone + Default;
     type PrivateKey;
-    type CommitmentScheme: CommitmentScheme;
-    type EncryptionScheme: EncryptionScheme;
-    type SignatureScheme: SignatureScheme;
+    type ViewKey;
 
-    fn new<R: Rng + CryptoRng>(
-        signature_parameters: &Self::SignatureScheme,
-        commitment_parameters: &Self::CommitmentScheme,
-        encryption_parameters: &Self::EncryptionScheme,
-        rng: &mut R,
-    ) -> Result<Self, AccountError>;
+    /// Creates a new account.
+    fn new<R: Rng + CryptoRng>(rng: &mut R) -> Self;
+
+    /// Returns a reference to the private key.
+    fn private_key(&self) -> &Self::PrivateKey;
+
+    /// Returns a reference to the view key.
+    fn view_key(&self) -> &Self::ViewKey;
+
+    /// Returns a reference to the address.
+    fn address(&self) -> Self::Address;
 }

@@ -14,14 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod bowe_hopwood_pedersen;
-pub use bowe_hopwood_pedersen::*;
-
-pub mod bowe_hopwood_pedersen_compressed;
-pub use bowe_hopwood_pedersen_compressed::*;
-
-pub mod bowe_hopwood_pedersen_parameters;
-pub use bowe_hopwood_pedersen_parameters::*;
+pub mod bhp;
+pub use bhp::*;
 
 pub mod pedersen;
 pub use pedersen::*;
@@ -29,8 +23,8 @@ pub use pedersen::*;
 pub mod pedersen_compressed;
 pub use pedersen_compressed::*;
 
-pub mod pedersen_parameters;
-pub use pedersen_parameters::*;
+pub mod poseidon;
+pub use poseidon::*;
 
 pub mod sha256;
 pub use sha256::*;

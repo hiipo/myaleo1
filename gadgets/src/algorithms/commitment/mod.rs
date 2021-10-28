@@ -14,11 +14,14 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod blake2s;
-pub use blake2s::*;
+pub mod bhp;
+pub use bhp::*;
 
 pub mod pedersen;
 pub use pedersen::*;
+
+pub mod pedersen_compressed;
+pub use pedersen_compressed::*;
 
 #[cfg(test)]
 pub mod tests;

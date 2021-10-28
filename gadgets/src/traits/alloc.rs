@@ -48,6 +48,7 @@ where
     }
 }
 
+// TODO (howardwu): Split this into 3 traits for the constant, public, and private.
 pub trait AllocGadget<V: ?Sized, F: Field>: Sized {
     fn alloc_constant<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<V>, CS: ConstraintSystem<F>>(
         _cs: CS,
@@ -56,11 +57,13 @@ pub trait AllocGadget<V: ?Sized, F: Field>: Sized {
         unimplemented!()
     }
 
+    // TODO (howardwu): Rename to `alloc_private`.
     fn alloc<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<V>, CS: ConstraintSystem<F>>(
         cs: CS,
         f: Fn,
     ) -> Result<Self, SynthesisError>;
 
+    // TODO (howardwu): Rename to `alloc_private_checked`.
     fn alloc_checked<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<V>, CS: ConstraintSystem<F>>(
         cs: CS,
         f: Fn,
@@ -68,11 +71,13 @@ pub trait AllocGadget<V: ?Sized, F: Field>: Sized {
         Self::alloc(cs, f)
     }
 
+    // TODO (howardwu): Rename to `alloc_public`.
     fn alloc_input<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<V>, CS: ConstraintSystem<F>>(
         cs: CS,
         f: Fn,
     ) -> Result<Self, SynthesisError>;
 
+    // TODO (howardwu): Rename to `alloc_public_checked`.
     fn alloc_input_checked<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<V>, CS: ConstraintSystem<F>>(
         cs: CS,
         f: Fn,
@@ -81,8 +86,8 @@ pub trait AllocGadget<V: ?Sized, F: Field>: Sized {
     }
 }
 
-impl<I, F: Field, A: AllocGadget<I, F>> AllocGadget<[I], F> for Vec<A> {
-    fn alloc<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<[I]>, CS: ConstraintSystem<F>>(
+impl<I, F: Field, A: AllocGadget<I, F>> AllocGadget<Vec<I>, F> for Vec<A> {
+    fn alloc<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<Vec<I>>, CS: ConstraintSystem<F>>(
         mut cs: CS,
         f: Fn,
     ) -> Result<Self, SynthesisError> {
@@ -94,7 +99,7 @@ impl<I, F: Field, A: AllocGadget<I, F>> AllocGadget<[I], F> for Vec<A> {
         Ok(vec)
     }
 
-    fn alloc_checked<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<[I]>, CS: ConstraintSystem<F>>(
+    fn alloc_checked<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<Vec<I>>, CS: ConstraintSystem<F>>(
         mut cs: CS,
         f: Fn,
     ) -> Result<Self, SynthesisError> {
@@ -108,7 +113,7 @@ impl<I, F: Field, A: AllocGadget<I, F>> AllocGadget<[I], F> for Vec<A> {
         Ok(vec)
     }
 
-    fn alloc_input<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<[I]>, CS: ConstraintSystem<F>>(
+    fn alloc_input<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<Vec<I>>, CS: ConstraintSystem<F>>(
         mut cs: CS,
         f: Fn,
     ) -> Result<Self, SynthesisError> {
@@ -122,7 +127,7 @@ impl<I, F: Field, A: AllocGadget<I, F>> AllocGadget<[I], F> for Vec<A> {
         Ok(vec)
     }
 
-    fn alloc_input_checked<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<[I]>, CS: ConstraintSystem<F>>(
+    fn alloc_input_checked<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<Vec<I>>, CS: ConstraintSystem<F>>(
         mut cs: CS,
         f: Fn,
     ) -> Result<Self, SynthesisError> {
@@ -135,5 +140,28 @@ impl<I, F: Field, A: AllocGadget<I, F>> AllocGadget<[I], F> for Vec<A> {
             )?);
         }
         Ok(vec)
+    }
+}
+
+impl<F: Field> AllocGadget<(), F> for () {
+    fn alloc_constant<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<()>, CS: ConstraintSystem<F>>(
+        _cs: CS,
+        _f: Fn,
+    ) -> Result<Self, SynthesisError> {
+        Ok(())
+    }
+
+    fn alloc<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<()>, CS: ConstraintSystem<F>>(
+        _cs: CS,
+        _f: Fn,
+    ) -> Result<Self, SynthesisError> {
+        unimplemented!()
+    }
+
+    fn alloc_input<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<()>, CS: ConstraintSystem<F>>(
+        _cs: CS,
+        _f: Fn,
+    ) -> Result<Self, SynthesisError> {
+        unimplemented!()
     }
 }

@@ -14,90 +14,130 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{account_format, traits::DPCComponents, AccountError, PrivateKey, ViewKey};
+use crate::{account_format, AccountError, ComputeKey, Network, PrivateKey, ViewKey};
 use snarkvm_algorithms::{EncryptionScheme, SignatureScheme};
-use snarkvm_utilities::{FromBytes, ToBytes};
-
-use bech32::{self, FromBase32, ToBase32};
-use std::{
+use snarkvm_curves::AffineCurve;
+use snarkvm_utilities::{
     fmt,
     io::{Read, Result as IoResult, Write},
+    ops::Deref,
     str::FromStr,
+    FromBytes,
+    FromBytesDeserializer,
+    ToBytes,
+    ToBytesSerializer,
 };
+
+use bech32::{self, FromBase32, ToBase32};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Derivative)]
 #[derivative(
-    Default(bound = "C: DPCComponents"),
-    Clone(bound = "C: DPCComponents"),
-    PartialEq(bound = "C: DPCComponents"),
-    Eq(bound = "C: DPCComponents")
+    Default(bound = "N: Network"),
+    Copy(bound = "N: Network"),
+    Clone(bound = "N: Network"),
+    PartialEq(bound = "N: Network"),
+    Eq(bound = "N: Network"),
+    Hash(bound = "N: Network")
 )]
-pub struct Address<C: DPCComponents> {
-    pub encryption_key: <C::AccountEncryption as EncryptionScheme>::PublicKey,
-}
+pub struct Address<N: Network>(<N::AccountEncryptionScheme as EncryptionScheme>::PublicKey);
 
-impl<C: DPCComponents> Address<C> {
+impl<N: Network> Address<N> {
     /// Derives the account address from an account private key.
-    pub fn from_private_key(
-        signature_parameters: &C::AccountSignature,
-        commitment_parameters: &C::AccountCommitment,
-        encryption_parameters: &C::AccountEncryption,
-        private_key: &PrivateKey<C>,
-    ) -> Result<Self, AccountError> {
-        let decryption_key = private_key.to_decryption_key(signature_parameters, commitment_parameters)?;
-        let encryption_key =
-            <C::AccountEncryption as EncryptionScheme>::generate_public_key(encryption_parameters, &decryption_key)?;
+    pub fn from_private_key(private_key: &PrivateKey<N>) -> Self {
+        Self::from_compute_key(&private_key.to_compute_key())
+    }
 
-        Ok(Self { encryption_key })
+    /// Derives the account address from an account compute key.
+    pub fn from_compute_key(compute_key: &ComputeKey<N>) -> Self {
+        Self(compute_key.to_encryption_key())
     }
 
     /// Derives the account address from an account view key.
-    pub fn from_view_key(
-        encryption_parameters: &C::AccountEncryption,
-        view_key: &ViewKey<C>,
-    ) -> Result<Self, AccountError> {
-        let encryption_key = <C::AccountEncryption as EncryptionScheme>::generate_public_key(
-            encryption_parameters,
-            &view_key.decryption_key,
-        )?;
-
-        Ok(Self { encryption_key })
-    }
-
-    #[allow(clippy::wrong_self_convention)]
-    pub fn into_repr(&self) -> &<C::AccountEncryption as EncryptionScheme>::PublicKey {
-        &self.encryption_key
+    pub fn from_view_key(view_key: &ViewKey<N>) -> Self {
+        // TODO (howardwu): This operation can be optimized by precomputing powers in ECIES native impl.
+        //  Optimizing this will also speed up encryption.
+        Self(N::account_encryption_scheme().generate_public_key(&*view_key))
     }
 
     /// Verifies a signature on a message signed by the account view key.
     /// Returns `true` if the signature is valid. Otherwise, returns `false`.
-    pub fn verify_signature(
-        &self,
-        encryption_parameters: &C::AccountEncryption,
-        message: &[u8],
-        signature: &<C::AccountEncryption as SignatureScheme>::Signature,
-    ) -> Result<bool, AccountError> {
-        Ok(encryption_parameters.verify(&self.encryption_key.clone().into(), message, signature)?)
+    pub fn verify_signature(&self, message: &[u8], signature: &N::AccountSignature) -> Result<bool, AccountError> {
+        Ok(N::account_signature_scheme().verify(&self.0, message, signature)?)
     }
 }
 
-impl<C: DPCComponents> ToBytes for Address<C> {
-    fn write_le<W: Write>(&self, mut writer: W) -> IoResult<()> {
-        self.encryption_key.write_le(&mut writer)
+impl<N: Network> From<PrivateKey<N>> for Address<N> {
+    /// Derives the account address from an account private key.
+    fn from(private_key: PrivateKey<N>) -> Self {
+        Self::from(&private_key)
     }
 }
 
-impl<C: DPCComponents> FromBytes for Address<C> {
+impl<N: Network> From<&PrivateKey<N>> for Address<N> {
+    /// Derives the account address from an account private key.
+    fn from(private_key: &PrivateKey<N>) -> Self {
+        Self::from_private_key(private_key)
+    }
+}
+
+impl<N: Network> From<ComputeKey<N>> for Address<N> {
+    /// Derives the account address from an account compute key.
+    fn from(compute_key: ComputeKey<N>) -> Self {
+        Self::from(&compute_key)
+    }
+}
+
+impl<N: Network> From<&ComputeKey<N>> for Address<N> {
+    /// Derives the account address from an account compute key.
+    fn from(compute_key: &ComputeKey<N>) -> Self {
+        Self::from_compute_key(compute_key)
+    }
+}
+
+impl<N: Network> From<ViewKey<N>> for Address<N> {
+    /// Derives the account address from an account view key.
+    fn from(view_key: ViewKey<N>) -> Self {
+        Self::from(&view_key)
+    }
+}
+
+impl<N: Network> From<&ViewKey<N>> for Address<N> {
+    /// Derives the account address from an account view key.
+    fn from(view_key: &ViewKey<N>) -> Self {
+        Self::from_view_key(view_key)
+    }
+}
+
+impl<N: Network> FromBytes for Address<N> {
     /// Reads in an account address buffer.
     #[inline]
     fn read_le<R: Read>(mut reader: R) -> IoResult<Self> {
-        let encryption_key: <C::AccountEncryption as EncryptionScheme>::PublicKey = FromBytes::read_le(&mut reader)?;
+        let x_coordinate = N::ProgramBaseField::read_le(&mut reader)?;
 
-        Ok(Self { encryption_key })
+        if let Some(element) = N::ProgramAffineCurve::from_x_coordinate(x_coordinate, true) {
+            if element.is_in_correct_subgroup_assuming_on_curve() {
+                return Ok(Self(element));
+            }
+        }
+
+        if let Some(element) = N::ProgramAffineCurve::from_x_coordinate(x_coordinate, false) {
+            if element.is_in_correct_subgroup_assuming_on_curve() {
+                return Ok(Self(element));
+            }
+        }
+
+        Err(AccountError::Message("Failed to read encryption public key address".into()).into())
     }
 }
 
-impl<C: DPCComponents> FromStr for Address<C> {
+impl<N: Network> ToBytes for Address<N> {
+    fn write_le<W: Write>(&self, mut writer: W) -> IoResult<()> {
+        self.0.to_x_coordinate().write_le(&mut writer)
+    }
+}
+
+impl<N: Network> FromStr for Address<N> {
     type Err = AccountError;
 
     /// Reads in an account address string.
@@ -121,26 +161,96 @@ impl<C: DPCComponents> FromStr for Address<C> {
     }
 }
 
-impl<C: DPCComponents> fmt::Display for Address<C> {
+impl<N: Network> fmt::Display for Address<N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // Write the encryption key to a buffer.
-        let mut address = [0u8; 32];
-        self.encryption_key
-            .write_le(&mut address[0..32])
-            .expect("address formatting failed");
+        // Convert the encryption key to bytes.
+        let encryption_key = self.to_bytes_le().expect("Failed to write encryption key as bytes");
 
         bech32::encode(
             &account_format::ADDRESS_PREFIX.to_string(),
-            address.to_base32(),
+            encryption_key.to_base32(),
             bech32::Variant::Bech32,
         )
-        .unwrap()
+        .expect("Failed to encode in bech32")
         .fmt(f)
     }
 }
 
-impl<C: DPCComponents> fmt::Debug for Address<C> {
+impl<N: Network> fmt::Debug for Address<N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Address {{ encryption_key: {:?} }}", self.encryption_key)
+        write!(f, "Address {{ encryption_key: {:?} }}", self.0)
+    }
+}
+
+impl<N: Network> Serialize for Address<N> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match serializer.is_human_readable() {
+            true => serializer.collect_str(self),
+            false => ToBytesSerializer::serialize(self, serializer),
+        }
+    }
+}
+
+impl<'de, N: Network> Deserialize<'de> for Address<N> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match deserializer.is_human_readable() {
+            true => FromStr::from_str(&String::deserialize(deserializer)?).map_err(de::Error::custom),
+            false => FromBytesDeserializer::<Self>::deserialize(deserializer, "address", N::ADDRESS_SIZE_IN_BYTES),
+        }
+    }
+}
+
+impl<N: Network> Deref for Address<N> {
+    type Target = <N::AccountEncryptionScheme as EncryptionScheme>::PublicKey;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testnet2::Testnet2;
+
+    use rand::thread_rng;
+
+    #[test]
+    fn test_serde_json() {
+        let rng = &mut thread_rng();
+
+        let private_key = PrivateKey::new(rng);
+        let expected_address: Address<Testnet2> = private_key.into();
+
+        // Serialize
+        let expected_string = &expected_address.to_string();
+        let candidate_string = serde_json::to_string(&expected_address).unwrap();
+        assert_eq!(
+            expected_string,
+            serde_json::Value::from_str(&candidate_string)
+                .unwrap()
+                .as_str()
+                .unwrap()
+        );
+
+        // Deserialize
+        assert_eq!(expected_address, Address::from_str(&expected_string).unwrap());
+        assert_eq!(expected_address, serde_json::from_str(&candidate_string).unwrap());
+    }
+
+    #[test]
+    fn test_bincode() {
+        let rng = &mut thread_rng();
+
+        let private_key = PrivateKey::new(rng);
+        let expected_address: Address<Testnet2> = private_key.into();
+
+        // Serialize
+        let expected_bytes = expected_address.to_bytes_le().unwrap();
+        assert_eq!(&expected_bytes[..], &bincode::serialize(&expected_address).unwrap()[..]);
+
+        // Deserialize
+        assert_eq!(expected_address, Address::read_le(&expected_bytes[..]).unwrap());
+        assert_eq!(expected_address, bincode::deserialize(&expected_bytes[..]).unwrap());
     }
 }

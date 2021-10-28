@@ -22,47 +22,26 @@ use crate::{
 use snarkvm_utilities::ToBytes;
 use std::sync::Arc;
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 #[derive(Default)]
 pub struct MerkleTree<P: MerkleParameters> {
     /// The computed root of the full Merkle tree.
-    root: Option<MerkleTreeDigest<P>>,
-
+    root: MerkleTreeDigest<P>,
     /// The internal hashes, from root to hashed leaves, of the full Merkle tree.
     tree: Vec<MerkleTreeDigest<P>>,
-
     /// The index from which hashes of each non-empty leaf in the Merkle tree can be obtained.
     hashed_leaves_index: usize,
-
     /// For each level after a full tree has been built from the leaves,
     /// keeps both the roots the siblings that are used to get to the desired depth.
     padding_tree: Vec<(MerkleTreeDigest<P>, MerkleTreeDigest<P>)>,
-
     /// The Merkle tree parameters (e.g. the hash function).
     parameters: Arc<P>,
 }
 
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
-
 impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
-    pub const DEPTH: u8 = P::DEPTH as u8;
-
-    fn hash_row<L: ToBytes + Send + Sync>(
-        parameters: &P,
-        leaves: &[L],
-    ) -> Result<Vec<Vec<<<P as MerkleParameters>::H as CRH>::Output>>, MerkleError> {
-        let hash_input_size_in_bytes = (P::H::INPUT_SIZE_BITS / 8) * 2;
-        cfg_chunks!(leaves, 500) // arbitrary, experimentally derived
-            .map(|chunk| -> Result<Vec<_>, MerkleError> {
-                let mut buffer = vec![0u8; hash_input_size_in_bytes];
-                let mut out = Vec::with_capacity(chunk.len());
-                for leaf in chunk.into_iter() {
-                    out.push(parameters.hash_leaf(&leaf, &mut buffer)?);
-                }
-                Ok(out)
-            })
-            .collect::<Result<Vec<_>, MerkleError>>()
-    }
+    pub const DEPTH: usize = P::DEPTH;
 
     pub fn new<L: ToBytes + Send + Sync>(parameters: Arc<P>, leaves: &[L]) -> Result<Self, MerkleError> {
         let new_time = start_timer!(|| "MerkleTree::new");
@@ -71,8 +50,8 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
         let tree_size = 2 * last_level_size - 1;
         let tree_depth = tree_depth(tree_size);
 
-        if tree_depth > Self::DEPTH as usize {
-            return Err(MerkleError::InvalidTreeDepth(tree_depth, Self::DEPTH as usize));
+        if tree_depth > Self::DEPTH {
+            return Err(MerkleError::InvalidTreeDepth(tree_depth, Self::DEPTH));
         }
 
         // Initialize the Merkle tree.
@@ -88,7 +67,6 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
         }
 
         // Compute and store the hash values for each leaf.
-        let hash_input_size_in_bytes = (P::H::INPUT_SIZE_BITS / 8) * 2;
         let last_level_index = level_indices.pop().unwrap_or(0);
 
         let subsections = Self::hash_row(&*parameters, leaves)?;
@@ -102,7 +80,6 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
 
         // Compute the hash values for every node in the tree.
         let mut upper_bound = last_level_index;
-        let mut buffer = vec![0u8; hash_input_size_in_bytes];
         level_indices.reverse();
         for &start_index in &level_indices {
             // Iterate over the current level.
@@ -125,13 +102,13 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
         // Finished computing actual tree.
         // Now, we compute the dummy nodes until we hit our DEPTH goal.
         let mut current_depth = tree_depth;
-        let mut padding_tree = Vec::with_capacity((Self::DEPTH as usize).saturating_sub(current_depth + 1));
+        let mut padding_tree = Vec::with_capacity((Self::DEPTH).saturating_sub(current_depth + 1));
         let mut current_hash = tree[0].clone();
-        while current_depth < Self::DEPTH as usize {
-            current_hash = parameters.hash_inner_node(&current_hash, &empty_hash, &mut buffer)?;
+        while current_depth < Self::DEPTH {
+            current_hash = parameters.hash_inner_node(&current_hash, &empty_hash)?;
 
             // do not pad at the top-level of the tree
-            if current_depth < Self::DEPTH as usize - 1 {
+            if current_depth < Self::DEPTH - 1 {
                 padding_tree.push((current_hash.clone(), empty_hash.clone()));
             }
             current_depth += 1;
@@ -145,7 +122,7 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
             padding_tree,
             hashed_leaves_index: last_level_index,
             parameters,
-            root: Some(root_hash),
+            root: root_hash,
         })
     }
 
@@ -156,8 +133,8 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
         let tree_size = 2 * last_level_size - 1;
         let tree_depth = tree_depth(tree_size);
 
-        if tree_depth > Self::DEPTH as usize {
-            return Err(MerkleError::InvalidTreeDepth(tree_depth, Self::DEPTH as usize));
+        if tree_depth > Self::DEPTH {
+            return Err(MerkleError::InvalidTreeDepth(tree_depth, Self::DEPTH));
         }
 
         // Initialize the Merkle tree.
@@ -166,17 +143,16 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
 
         // Compute the starting index (on the left) for each level of the tree.
         let mut index = 0;
-        let mut level_indices = Vec::with_capacity(tree_depth);
+        let mut level_indices = Vec::with_capacity(tree_depth + 1);
         for _ in 0..=tree_depth {
             level_indices.push(index);
             index = left_child(index);
         }
 
         // Track the indices of newly added leaves.
-        let new_indices = (start_index..start_index + new_leaves.len()).collect::<Vec<_>>();
+        let new_indices = || start_index..start_index + new_leaves.len();
 
         // Compute and store the hash values for each leaf.
-        let hash_input_size_in_bytes = (P::H::INPUT_SIZE_BITS / 8) * 2;
         let last_level_index = level_indices.pop().unwrap_or(0);
 
         // The beginning of the tree can be reconstructed from pre-existing hashed leaves.
@@ -192,7 +168,6 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
 
         // Compute the hash values for every node in the tree.
         let mut upper_bound = last_level_index;
-        let mut buffer = vec![0u8; hash_input_size_in_bytes];
         level_indices.reverse();
         for &start_index in &level_indices {
             // Iterate over the current level.
@@ -201,17 +176,13 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
                 let right_index = right_child(current_index);
 
                 // Hash only the tree paths that are altered by the addition of new leaves or are brand new.
-                if new_indices.contains(&current_index)
+                if new_indices().contains(&current_index)
                     || self.tree.get(left_index) != tree.get(left_index)
                     || self.tree.get(right_index) != tree.get(right_index)
-                    || new_indices
-                        .iter()
-                        .any(|&idx| Ancestors(idx).into_iter().find(|&i| i == current_index).is_some())
+                    || new_indices().any(|idx| Ancestors(idx).into_iter().find(|&i| i == current_index).is_some())
                 {
                     // Compute Hash(left || right).
-                    tree[current_index] =
-                        self.parameters
-                            .hash_inner_node(&tree[left_index], &tree[right_index], &mut buffer)?;
+                    tree[current_index] = self.parameters.hash_inner_node(&tree[left_index], &tree[right_index])?;
                 } else {
                     tree[current_index] = self.tree[current_index].clone();
                 }
@@ -226,21 +197,19 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
 
         // The whole padding tree can be reused if the current hash matches the previous one.
         let new_padding_tree = if current_hash == self.tree[0] {
-            current_hash =
-                self.parameters
-                    .hash_inner_node(&self.padding_tree.last().unwrap().0, &empty_hash, &mut buffer)?;
+            current_hash = self
+                .parameters
+                .hash_inner_node(&self.padding_tree.last().unwrap().0, &empty_hash)?;
 
             None
         } else {
-            let mut padding_tree = Vec::with_capacity((Self::DEPTH as usize).saturating_sub(current_depth + 1));
+            let mut padding_tree = Vec::with_capacity((Self::DEPTH).saturating_sub(current_depth + 1));
 
-            while current_depth < Self::DEPTH as usize {
-                current_hash = self
-                    .parameters
-                    .hash_inner_node(&current_hash, &empty_hash, &mut buffer)?;
+            while current_depth < Self::DEPTH {
+                current_hash = self.parameters.hash_inner_node(&current_hash, &empty_hash)?;
 
                 // do not pad at the top-level of the tree
-                if current_depth < Self::DEPTH as usize - 1 {
+                if current_depth < Self::DEPTH - 1 {
                     padding_tree.push((current_hash.clone(), empty_hash.clone()));
                 }
                 current_depth += 1;
@@ -254,7 +223,7 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
 
         // update the values at the very end so the original tree is not altered in case of failure
         Ok(MerkleTree {
-            root: Some(root_hash),
+            root: root_hash,
             tree,
             hashed_leaves_index: last_level_index,
             padding_tree: if let Some(padding_tree) = new_padding_tree {
@@ -267,8 +236,8 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
     }
 
     #[inline]
-    pub fn root(&self) -> <P::H as CRH>::Output {
-        self.root.clone().unwrap()
+    pub fn root(&self) -> &<P::H as CRH>::Output {
+        &self.root
     }
 
     #[inline]
@@ -285,55 +254,63 @@ impl<P: MerkleParameters + Send + Sync> MerkleTree<P> {
         let prove_time = start_timer!(|| "MerkleTree::generate_proof");
         let mut path = vec![];
 
-        let hash_input_size_in_bytes = (P::H::INPUT_SIZE_BITS / 8) * 2;
-        let mut buffer = vec![0u8; hash_input_size_in_bytes];
-
-        let leaf_hash = self.parameters.hash_leaf(leaf, &mut buffer)?;
+        let leaf_hash = self.parameters.hash_leaf(leaf)?;
 
         let tree_depth = tree_depth(self.tree.len());
         let tree_index = convert_index_to_last_level(index, tree_depth);
 
         // Check that the given index corresponds to the correct leaf.
-        if leaf_hash != self.tree[tree_index] {
+        if tree_index >= self.tree.len() || leaf_hash != self.tree[tree_index] {
             return Err(MerkleError::IncorrectLeafIndex(tree_index));
         }
 
-        // Iterate from the leaf up to the root, storing all intermediate hash values.
+        // Iterate from the leaf's parent up to the root, storing all intermediate hash values.
         let mut current_node = tree_index;
         while !is_root(current_node) {
             let sibling_node = sibling(current_node).unwrap();
-            let (curr_hash, sibling_hash) = (self.tree[current_node].clone(), self.tree[sibling_node].clone());
-            if is_left_child(current_node) {
-                path.push((curr_hash, sibling_hash));
-            } else {
-                path.push((sibling_hash, curr_hash));
-            }
+            path.push(self.tree[sibling_node].clone());
             current_node = parent(current_node).unwrap();
         }
 
         // Store the root node. Set boolean as true for consistency with digest location.
-        if path.len() > Self::DEPTH as usize {
-            return Err(MerkleError::InvalidPathLength(path.len(), Self::DEPTH as usize));
+        if path.len() > Self::DEPTH {
+            return Err(MerkleError::InvalidPathLength(path.len(), Self::DEPTH));
         }
 
-        if path.len() != Self::DEPTH as usize {
+        if path.len() != Self::DEPTH {
             let empty_hash = self.parameters.hash_empty()?;
-            path.push((self.tree[0].clone(), empty_hash));
+            path.push(empty_hash);
 
-            for &(ref hash, ref sibling_hash) in &self.padding_tree {
-                path.push((hash.clone(), sibling_hash.clone()));
+            for &(ref _hash, ref sibling_hash) in &self.padding_tree {
+                path.push(sibling_hash.clone());
             }
         }
         end_timer!(prove_time);
 
-        if path.len() != Self::DEPTH as usize {
+        if path.len() != Self::DEPTH {
             Err(MerkleError::IncorrectPathLength(path.len()))
         } else {
             Ok(MerklePath {
                 parameters: self.parameters.clone(),
                 path,
+                leaf_index: index as u64,
             })
         }
+    }
+
+    fn hash_row<L: ToBytes + Send + Sync>(
+        parameters: &P,
+        leaves: &[L],
+    ) -> Result<Vec<Vec<<<P as MerkleParameters>::H as CRH>::Output>>, MerkleError> {
+        cfg_chunks!(leaves, 500) // arbitrary, experimentally derived
+            .map(|chunk| -> Result<Vec<_>, MerkleError> {
+                let mut out = Vec::with_capacity(chunk.len());
+                for leaf in chunk.into_iter() {
+                    out.push(parameters.hash_leaf(&leaf)?);
+                }
+                Ok(out)
+            })
+            .collect::<Result<Vec<_>, MerkleError>>()
     }
 }
 

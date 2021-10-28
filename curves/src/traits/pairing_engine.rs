@@ -15,12 +15,13 @@
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::traits::Group;
-use snarkvm_fields::{Field, PrimeField, SquareRootField};
-use snarkvm_utilities::{biginteger::BigInteger, serialize::*, BitIteratorBE, ToBytes};
+use snarkvm_fields::{Field, PrimeField, SquareRootField, ToConstraintField};
+use snarkvm_utilities::{biginteger::BigInteger, serialize::*, BitIteratorBE, ToBytes, ToMinimalBits};
 
+use serde::{de::DeserializeOwned, Serialize};
 use std::{fmt::Debug, iter};
 
-pub trait PairingEngine: Sized + 'static + Copy + Debug + Sync + Send {
+pub trait PairingEngine: Sized + 'static + Copy + Debug + PartialEq + Eq + Sync + Send {
     /// This is the scalar field of the G1/G2 groups.
     type Fr: PrimeField + SquareRootField + Into<<Self::Fr as PrimeField>::BigInteger>;
 
@@ -31,7 +32,8 @@ pub trait PairingEngine: Sized + 'static + Copy + Debug + Sync + Send {
     /// The affine representation of an element in G1.
     type G1Affine: AffineCurve<BaseField = Self::Fq, ScalarField = Self::Fr, Projective = Self::G1Projective>
         + PairingCurve<PairWith = Self::G2Affine, PairingResult = Self::Fqk>
-        + From<Self::G1Projective>;
+        + From<Self::G1Projective>
+        + ToConstraintField<Self::Fq>;
 
     /// The projective representation of an element in G2.
     type G2Projective: ProjectiveCurve<BaseField = Self::Fqe, ScalarField = Self::Fr, Affine = Self::G2Affine>
@@ -40,7 +42,8 @@ pub trait PairingEngine: Sized + 'static + Copy + Debug + Sync + Send {
     /// The affine representation of an element in G2.
     type G2Affine: AffineCurve<BaseField = Self::Fqe, ScalarField = Self::Fr, Projective = Self::G2Projective>
         + PairingCurve<PairWith = Self::G1Affine, PairingResult = Self::Fqk>
-        + From<Self::G2Projective>;
+        + From<Self::G2Projective>
+        + ToConstraintField<Self::Fq>;
 
     /// The base field that hosts G1.
     type Fq: PrimeField + SquareRootField;
@@ -154,10 +157,13 @@ pub trait ProjectiveCurve:
 pub trait AffineCurve:
     Group
     + Sized
+    + Serialize
+    + DeserializeOwned
     + CanonicalSerialize
     + ConstantSerializedSize
     + CanonicalDeserialize
     + From<<Self as AffineCurve>::Projective>
+    + ToMinimalBits
 {
     type BaseField: Field;
     type Projective: ProjectiveCurve<Affine = Self, ScalarField = Self::ScalarField> + From<Self> + Into<Self>;
@@ -226,7 +232,16 @@ pub trait AffineCurve:
 
 pub trait PairingCurve: AffineCurve {
     type Engine: PairingEngine<Fr = Self::ScalarField>;
-    type Prepared: CanonicalSerialize + CanonicalDeserialize + ToBytes + Default + Clone + Send + Sync + Debug + 'static;
+    type Prepared: CanonicalSerialize
+        + CanonicalDeserialize
+        + ToBytes
+        + FromBytes
+        + Default
+        + Clone
+        + Send
+        + Sync
+        + Debug
+        + 'static;
     type PairWith: PairingCurve<PairWith = Self>;
     type PairingResult: Field;
 

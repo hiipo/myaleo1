@@ -20,23 +20,21 @@ use hashbrown::{HashMap, HashSet};
 
 use snarkvm_fields::PrimeField;
 use snarkvm_gadgets::{
-    bits::{Boolean, ToBytesGadget},
+    bits::Boolean,
     fields::FpGadget,
     nonnative::NonNativeFieldVar,
     traits::alloc::AllocGadget,
+    PrepareGadget,
+    ToBytesGadget,
+    ToConstraintFieldGadget,
+    ToMinimalBitsGadget,
 };
 use snarkvm_r1cs::{ConstraintSystem, SynthesisError};
 
 use crate::{BatchLCProof, LCTerm, LabeledCommitment, LinearCombination, PolynomialCommitment, String, Vec};
 
-/// Define the minimal interface of prepared allocated structures.
-pub trait PrepareGadget<Unprepared, F: PrimeField>: Sized {
-    /// Prepare from an unprepared element.
-    fn prepare<CS: ConstraintSystem<F>>(cs: CS, unprepared: &Unprepared) -> Result<Self, SynthesisError>;
-}
-
 /// A coefficient of `LinearCombination`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LinearCombinationCoeffVar<TargetField: PrimeField, BaseField: PrimeField> {
     /// Coefficient 1.
     One,
@@ -155,20 +153,29 @@ pub struct PCCheckRandomDataVar<TargetField: PrimeField, BaseField: PrimeField> 
 
 /// Describes the interface for a gadget for a `PolynomialCommitment`
 /// verifier.
-pub trait PCCheckVar<PCF: PrimeField, PC: PolynomialCommitment<PCF>, ConstraintF: PrimeField>: Clone {
+pub trait PCCheckVar<PCF: PrimeField, PC: PolynomialCommitment<PCF, ConstraintF>, ConstraintF: PrimeField>:
+    Clone
+{
     /// An allocated version of `PC::VerifierKey`.
-    type VerifierKeyVar: AllocGadget<PC::VerifierKey, ConstraintF> + Clone + ToBytesGadget<ConstraintF>;
+    type VerifierKeyVar: AllocGadget<PC::VerifierKey, ConstraintF>
+        + Clone
+        + ToBytesGadget<ConstraintF>
+        + ToConstraintFieldGadget<ConstraintF>
+        + PrepareGadget<Self::PreparedVerifierKeyVar, ConstraintF>;
     /// An allocated version of `PC::PreparedVerifierKey`.
     type PreparedVerifierKeyVar: AllocGadget<PC::PreparedVerifierKey, ConstraintF>
+        + AllocGadget<PC::VerifierKey, ConstraintF>
         + Clone
-        + PrepareGadget<Self::VerifierKeyVar, ConstraintF>
         + Into<Self::VerifierKeyVar>;
     /// An allocated version of `PC::Commitment`.
-    type CommitmentVar: AllocGadget<PC::Commitment, ConstraintF> + Clone + ToBytesGadget<ConstraintF>;
+    type CommitmentVar: AllocGadget<PC::Commitment, ConstraintF>
+        + Clone
+        + ToBytesGadget<ConstraintF>
+        + ToConstraintFieldGadget<ConstraintF>
+        + PrepareGadget<Self::PreparedCommitmentVar, ConstraintF>
+        + ToMinimalBitsGadget<ConstraintF>;
     /// An allocated version of `PC::PreparedCommitment`.
-    type PreparedCommitmentVar: AllocGadget<PC::PreparedCommitment, ConstraintF>
-        + PrepareGadget<Self::CommitmentVar, ConstraintF>
-        + Clone;
+    type PreparedCommitmentVar: AllocGadget<PC::PreparedCommitment, ConstraintF> + Clone;
     /// An allocated version of `LabeledCommitment<PC::Commitment>`.
     type LabeledCommitmentVar: AllocGadget<LabeledCommitment<PC::Commitment>, ConstraintF> + Clone;
     /// A prepared, allocated version of `LabeledCommitment<PC::Commitment>`.
@@ -177,19 +184,7 @@ pub trait PCCheckVar<PCF: PrimeField, PC: PolynomialCommitment<PCF>, ConstraintF
     type ProofVar: AllocGadget<PC::Proof, ConstraintF> + Clone;
 
     /// An allocated version of `PC::BatchLCProof`.
-    type BatchLCProofVar: AllocGadget<BatchLCProof<PCF, PC>, ConstraintF> + Clone;
-
-    /// Add to `ConstraintSystem<ConstraintF>` new constraints that check that `proof_i` is a valid evaluation
-    /// proof at `point_i` for the polynomial in `commitment_i`.
-    fn batch_check_evaluations<CS: ConstraintSystem<ConstraintF>>(
-        cs: CS,
-        verification_key: &Self::VerifierKeyVar,
-        commitments: &[Self::LabeledCommitmentVar],
-        query_set: &QuerySetVar<PCF, ConstraintF>,
-        evaluations: &EvaluationsVar<PCF, ConstraintF>,
-        proofs: &[Self::ProofVar],
-        rand_data: &PCCheckRandomDataVar<PCF, ConstraintF>,
-    ) -> Result<Boolean, SynthesisError>;
+    type BatchLCProofVar: AllocGadget<BatchLCProof<PCF, ConstraintF, PC>, ConstraintF> + Clone;
 
     /// Add to `ConstraintSystem<ConstraintF>` new constraints that conditionally check that `proof` is a valid evaluation
     /// proof at the points in `query_set` for the combinations `linear_combinations`.

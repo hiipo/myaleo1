@@ -18,13 +18,11 @@ use std::fmt::Debug;
 
 use snarkvm_fields::{Field, FieldParameters, PrimeField, ToConstraintField};
 use snarkvm_r1cs::{errors::SynthesisError, Assignment, ConstraintSystem, LinearCombination};
-use snarkvm_utilities::ToBytes;
 
 use crate::{
     bits::{
         boolean::{AllocatedBit, Boolean},
         ToBitsBEGadget,
-        ToBytesGadget,
     },
     fields::FpGadget,
     traits::{
@@ -33,6 +31,8 @@ use crate::{
         integers::Integer,
         select::CondSelectGadget,
     },
+    ToBitsLEGadget,
+    ToConstraintFieldGadget,
     UnsignedIntegerError,
 };
 
@@ -113,5 +113,32 @@ impl UInt8 {
             .chunks(8)
             .map(Self::from_bits_le)
             .collect())
+    }
+}
+
+/// Parses the `Vec<UInt8>` in fixed-sized `ConstraintF::Params::CAPACITY` chunks and
+/// converts each chunk, which is assumed to be little-endian, to its `FpGadget<ConstraintF>`
+/// representation.
+impl<ConstraintF: PrimeField> ToConstraintFieldGadget<ConstraintF> for [UInt8] {
+    fn to_constraint_field<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        mut cs: CS,
+    ) -> Result<Vec<FpGadget<ConstraintF>>, SynthesisError> {
+        let max_size = (ConstraintF::Parameters::CAPACITY / 8) as usize;
+        let mut res = Vec::new();
+        for (i, chunk) in self.chunks(max_size).enumerate() {
+            let bits = chunk.to_bits_le(cs.ns(|| format!("chunk to bits {}", i)))?;
+            res.push(Boolean::le_bits_to_fp_var(cs.ns(|| format!("combine {}", i)), &bits)?);
+        }
+        Ok(res)
+    }
+}
+
+impl<ConstraintF: PrimeField> ToConstraintFieldGadget<ConstraintF> for Vec<UInt8> {
+    fn to_constraint_field<CS: ConstraintSystem<ConstraintF>>(
+        &self,
+        cs: CS,
+    ) -> Result<Vec<FpGadget<ConstraintF>>, SynthesisError> {
+        self.as_slice().to_constraint_field(cs)
     }
 }

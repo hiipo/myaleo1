@@ -37,14 +37,11 @@ pub mod macros;
 #[cfg(feature = "commitment")]
 pub mod commitment;
 
-#[cfg(feature = "commitment_tree")]
-pub mod commitment_tree;
-
 #[cfg(feature = "crh")]
 pub mod crh;
 
-#[cfg(feature = "encoding")]
-pub mod encoding;
+#[cfg(feature = "crypto_hash")]
+pub mod crypto_hash;
 
 #[cfg(feature = "encryption")]
 pub mod encryption;
@@ -54,6 +51,9 @@ pub use errors::*;
 
 #[cfg(feature = "fft")]
 pub mod fft;
+
+#[cfg(feature = "hash_to_curve")]
+pub mod hash_to_curve;
 
 #[cfg(feature = "merkle_tree")]
 pub mod merkle_tree;

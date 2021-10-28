@@ -14,12 +14,13 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::errors::TransactionError;
-
 use std::fmt::Debug;
 
 #[derive(Debug, Error)]
 pub enum BlockError {
+    #[error("{}", _0)]
+    AnyhowError(#[from] anyhow::Error),
+
     #[error("block already exists {}", _0)]
     BlockExists(String),
 
@@ -28,22 +29,16 @@ pub enum BlockError {
 
     #[error("{}", _0)]
     Message(String),
-
-    #[error("{}", _0)]
-    TransactionError(#[from] TransactionError),
-
-    #[error("block number {} has not been mined yet", _0)]
-    InvalidBlockNumber(u32),
-
-    #[error("expected block parent: {} got parent: {} ", _0, _1)]
-    InvalidParent(String, String),
-
-    #[error("the given block {} is not a canonical or sidechain block", _0)]
-    IrrelevantBlock(String),
 }
 
 impl From<std::io::Error> for BlockError {
     fn from(error: std::io::Error) -> Self {
         BlockError::Crate("std::io", format!("{:?}", error))
+    }
+}
+
+impl From<BlockError> for std::io::Error {
+    fn from(error: BlockError) -> Self {
+        std::io::Error::new(std::io::ErrorKind::Other, format!("{}", error))
     }
 }

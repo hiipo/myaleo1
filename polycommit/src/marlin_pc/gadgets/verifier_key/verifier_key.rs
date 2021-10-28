@@ -17,7 +17,7 @@
 use core::borrow::Borrow;
 
 use snarkvm_curves::{AffineCurve, PairingEngine};
-use snarkvm_fields::{PrimeField, ToConstraintField};
+use snarkvm_fields::PrimeField;
 use snarkvm_gadgets::{
     bits::{Boolean, ToBytesGadget},
     fields::FpGadget,
@@ -29,10 +29,15 @@ use snarkvm_gadgets::{
         fields::{FieldGadget, ToConstraintFieldGadget},
         select::CondSelectGadget,
     },
+    PrepareGadget,
 };
 use snarkvm_r1cs::{ConstraintSystem, SynthesisError};
 
-use crate::{kzg10::VerifierKey as KZG10VerifierKey, marlin_pc::data_structures::VerifierKey, Vec};
+use crate::{
+    kzg10::VerifierKey as KZG10VerifierKey,
+    marlin_pc::{data_structures::VerifierKey, gadgets::verifier_key::prepared_verifier_key::PreparedVerifierKeyVar},
+    Vec,
+};
 
 /// Var for the verification key of the Marlin-KZG10 polynomial commitment scheme.
 #[allow(clippy::type_complexity)]
@@ -43,6 +48,8 @@ pub struct VerifierKeyVar<
 > {
     /// Generator of G1.
     pub g: PG::G1Gadget,
+    /// The generator of G1 that is used for making a commitment hiding.
+    pub gamma_g: PG::G1Gadget,
     /// Generator of G2.
     pub h: PG::G2Gadget,
     /// Generator of G1, times first monomial.
@@ -62,10 +69,10 @@ where
         &self,
         mut cs: CS,
         bound: &FpGadget<<BaseCurve as PairingEngine>::Fr>,
-    ) -> Option<PG::G1Gadget> {
+    ) -> Result<PG::G1Gadget, SynthesisError> {
         // Search the bound using PIR
         if self.degree_bounds_and_shift_powers.is_none() {
-            None
+            return Err(SynthesisError::UnexpectedIdentity);
         } else {
             let degree_bounds_and_shift_powers = self.degree_bounds_and_shift_powers.clone().unwrap();
 
@@ -82,56 +89,53 @@ where
 
             let mut pir_vector_gadgets = Vec::new();
             for (i, bit) in pir_vector.iter().enumerate() {
-                pir_vector_gadgets.push(Boolean::alloc(cs.ns(|| format!("alloc_pir_{}", i)), || Ok(bit)).unwrap());
+                pir_vector_gadgets.push(Boolean::alloc(cs.ns(|| format!("alloc_pir_{}", i)), || Ok(bit))?);
             }
 
             // Sum of the PIR values are equal to one
-            let mut sum = FpGadget::<<BaseCurve as PairingEngine>::Fr>::zero(cs.ns(|| "zero")).unwrap();
-            let one = FpGadget::<<BaseCurve as PairingEngine>::Fr>::one(cs.ns(|| "one")).unwrap();
+            let mut sum = FpGadget::<<BaseCurve as PairingEngine>::Fr>::zero(cs.ns(|| "zero"))?;
+            let one = FpGadget::<<BaseCurve as PairingEngine>::Fr>::one(cs.ns(|| "one"))?;
             for (i, pir_gadget) in pir_vector_gadgets.iter().enumerate() {
                 let temp = FpGadget::<<BaseCurve as PairingEngine>::Fr>::from_boolean(
                     cs.ns(|| format!("from_boolean_{}", i)),
                     pir_gadget.clone(),
-                )
-                .unwrap();
+                )?;
 
-                sum = sum.add(cs.ns(|| format!("sum_add_pir{}", i)), &temp).unwrap();
+                sum = sum.add(cs.ns(|| format!("sum_add_pir{}", i)), &temp)?;
             }
-            sum.enforce_equal(cs.ns(|| "sum_enforce_equal"), &one).unwrap();
+            sum.enforce_equal(cs.ns(|| "sum_enforce_equal"), &one)?;
 
             // PIR the value
-            let mut found_bound =
-                FpGadget::<<BaseCurve as PairingEngine>::Fr>::zero(cs.ns(|| "found_bound_zero")).unwrap();
+            let zero_bound = FpGadget::<<BaseCurve as PairingEngine>::Fr>::zero(cs.ns(|| "zero_bound"))?;
+            let zero_shift_power = PG::G1Gadget::zero(cs.ns(|| "zero_shift_power"))?;
 
-            let mut found_shift_power = PG::G1Gadget::zero(cs.ns(|| "found_shift_power_zero")).unwrap();
+            let mut sum_bound = zero_bound.clone();
+            let mut found_shift_power = zero_shift_power.clone();
 
             for (i, (pir_gadget, (_, degree, shift_power))) in pir_vector_gadgets
                 .iter()
                 .zip(degree_bounds_and_shift_powers.iter())
                 .enumerate()
             {
-                found_bound = FpGadget::<<BaseCurve as PairingEngine>::Fr>::conditionally_select(
+                let found_bound = FpGadget::<<BaseCurve as PairingEngine>::Fr>::conditionally_select(
                     cs.ns(|| format!("found_bound_coond_select{}", i)),
                     pir_gadget,
                     degree,
-                    &found_bound,
-                )
-                .unwrap();
+                    &zero_bound,
+                )?;
+                sum_bound.add_in_place(cs.ns(|| format!("update sum_bound{}", i)), &found_bound)?;
 
                 found_shift_power = PG::G1Gadget::conditionally_select(
                     cs.ns(|| format!("found_shift_conditionally_select+{}", i)),
                     pir_gadget,
                     shift_power,
                     &found_shift_power,
-                )
-                .unwrap();
+                )?;
             }
 
-            found_bound
-                .enforce_equal(cs.ns(|| "found_bound_enforce_equal"), &bound)
-                .unwrap();
+            sum_bound.enforce_equal(cs.ns(|| "found_bound_enforce_equal"), &bound)?;
 
-            Some(found_shift_power)
+            Ok(found_shift_power)
         }
     }
 }
@@ -145,6 +149,7 @@ where
     fn clone(&self) -> Self {
         Self {
             g: self.g.clone(),
+            gamma_g: self.gamma_g.clone(),
             h: self.h.clone(),
             beta_h: self.beta_h.clone(),
             degree_bounds_and_shift_powers: self.degree_bounds_and_shift_powers.clone(),
@@ -193,14 +198,18 @@ where
                 .collect()
         });
 
-        let KZG10VerifierKey { g, h, beta_h, .. } = vk;
+        let KZG10VerifierKey {
+            g, gamma_g, h, beta_h, ..
+        } = vk;
 
         let g = PG::G1Gadget::alloc_constant(cs.ns(|| "g"), || Ok(g.into_projective()))?;
+        let gamma_g = PG::G1Gadget::alloc_constant(cs.ns(|| "gamma_g"), || Ok(gamma_g.into_projective()))?;
         let h = PG::G2Gadget::alloc_constant(cs.ns(|| "h"), || Ok(h.into_projective()))?;
         let beta_h = PG::G2Gadget::alloc_constant(cs.ns(|| "beta_h"), || Ok(beta_h.into_projective()))?;
 
         Ok(Self {
             g,
+            gamma_g,
             h,
             beta_h,
             degree_bounds_and_shift_powers,
@@ -240,14 +249,18 @@ where
                 .collect()
         });
 
-        let KZG10VerifierKey { g, h, beta_h, .. } = vk;
+        let KZG10VerifierKey {
+            g, gamma_g, h, beta_h, ..
+        } = vk;
 
         let g = PG::G1Gadget::alloc(cs.ns(|| "g"), || Ok(g.into_projective()))?;
+        let gamma_g = PG::G1Gadget::alloc(cs.ns(|| "gamma_g"), || Ok(gamma_g.into_projective()))?;
         let h = PG::G2Gadget::alloc(cs.ns(|| "h"), || Ok(h.into_projective()))?;
         let beta_h = PG::G2Gadget::alloc(cs.ns(|| "beta_h"), || Ok(beta_h.into_projective()))?;
 
         Ok(Self {
             g,
+            gamma_g,
             h,
             beta_h,
             degree_bounds_and_shift_powers,
@@ -287,14 +300,18 @@ where
                 .collect()
         });
 
-        let KZG10VerifierKey { g, h, beta_h, .. } = vk;
+        let KZG10VerifierKey {
+            g, gamma_g, h, beta_h, ..
+        } = vk;
 
         let g = PG::G1Gadget::alloc_input(cs.ns(|| "g"), || Ok(g.into_projective()))?;
+        let gamma_g = PG::G1Gadget::alloc_constant(cs.ns(|| "gamma_g"), || Ok(gamma_g.into_projective()))?;
         let h = PG::G2Gadget::alloc_input(cs.ns(|| "h"), || Ok(h.into_projective()))?;
         let beta_h = PG::G2Gadget::alloc_input(cs.ns(|| "beta_h"), || Ok(beta_h.into_projective()))?;
 
         Ok(Self {
             g,
+            gamma_g,
             h,
             beta_h,
             degree_bounds_and_shift_powers,
@@ -316,6 +333,7 @@ where
         let mut bytes = Vec::new();
 
         bytes.extend_from_slice(&self.g.to_bytes(cs.ns(|| "g_to_bytes"))?);
+        bytes.extend_from_slice(&self.gamma_g.to_bytes(cs.ns(|| "gamma_g_to_bytes"))?);
         bytes.extend_from_slice(&self.h.to_bytes(cs.ns(|| "h_to_bytes"))?);
         bytes.extend_from_slice(&self.beta_h.to_bytes(cs.ns(|| "beta_h_to_bytes"))?);
 
@@ -338,6 +356,67 @@ where
     }
 }
 
+impl<TargetCurve, BaseCurve, PG>
+    PrepareGadget<PreparedVerifierKeyVar<TargetCurve, BaseCurve, PG>, <BaseCurve as PairingEngine>::Fr>
+    for VerifierKeyVar<TargetCurve, BaseCurve, PG>
+where
+    TargetCurve: PairingEngine,
+    BaseCurve: PairingEngine,
+    PG: PairingGadget<TargetCurve, <BaseCurve as PairingEngine>::Fr>,
+{
+    fn prepare<CS: ConstraintSystem<<BaseCurve as PairingEngine>::Fr>>(
+        &self,
+        mut cs: CS,
+    ) -> Result<PreparedVerifierKeyVar<TargetCurve, BaseCurve, PG>, SynthesisError> {
+        let supported_bits = <<TargetCurve as PairingEngine>::Fr as PrimeField>::size_in_bits();
+        let mut prepared_g = Vec::<PG::G1Gadget>::new();
+        let mut prepared_gamma_g = Vec::<PG::G1Gadget>::new();
+
+        let mut g: PG::G1Gadget = self.g.clone();
+        for i in 0..supported_bits {
+            prepared_g.push(g.clone());
+            g.double_in_place(cs.ns(|| format!("double_in_place_{}", i)))?;
+        }
+
+        let mut gamma_g: PG::G1Gadget = self.gamma_g.clone();
+        for i in 0..supported_bits {
+            prepared_gamma_g.push(gamma_g.clone());
+            gamma_g.double_in_place(cs.ns(|| format!("double_in_place_{}_gamma_g", i)))?;
+        }
+
+        let prepared_h = PG::prepare_g2(cs.ns(|| "prepared_h"), self.h.clone())?;
+        let prepared_beta_h = PG::prepare_g2(cs.ns(|| "prepared_beta_h"), self.beta_h.clone())?;
+
+        let prepared_degree_bounds_and_shift_powers = if self.degree_bounds_and_shift_powers.is_some() {
+            let mut res = Vec::<(usize, FpGadget<<BaseCurve as PairingEngine>::Fr>, Vec<PG::G1Gadget>)>::new();
+
+            for (d, d_gadget, shift_power) in self.degree_bounds_and_shift_powers.as_ref().unwrap().iter() {
+                let mut prepared_shift_power = Vec::<PG::G1Gadget>::new();
+                let mut shift_power: PG::G1Gadget = shift_power.clone();
+                for i in 0..supported_bits {
+                    prepared_shift_power.push(shift_power.clone());
+                    shift_power.double_in_place(cs.ns(|| format!("double_in_place_{}_{}", d, i)))?;
+                }
+
+                res.push((*d, (*d_gadget).clone(), prepared_shift_power));
+            }
+
+            Some(res)
+        } else {
+            None
+        };
+
+        Ok(PreparedVerifierKeyVar::<TargetCurve, BaseCurve, PG> {
+            prepared_g,
+            prepared_gamma_g,
+            prepared_h,
+            prepared_beta_h,
+            degree_bounds_and_prepared_shift_powers: prepared_degree_bounds_and_shift_powers,
+            origin_vk: Some(self.clone()),
+        })
+    }
+}
+
 impl<TargetCurve, BaseCurve, PG> ToConstraintFieldGadget<<BaseCurve as PairingEngine>::Fr>
     for VerifierKeyVar<TargetCurve, BaseCurve, PG>
 where
@@ -345,10 +424,6 @@ where
     BaseCurve: PairingEngine,
     <BaseCurve as PairingEngine>::Fr: PrimeField,
     PG: PairingGadget<TargetCurve, <BaseCurve as PairingEngine>::Fr>,
-    PG::G1Gadget: ToConstraintFieldGadget<<BaseCurve as PairingEngine>::Fr>,
-    PG::G2Gadget: ToConstraintFieldGadget<<BaseCurve as PairingEngine>::Fr>,
-    <TargetCurve as PairingEngine>::G1Affine: ToConstraintField<<BaseCurve as PairingEngine>::Fr>,
-    <TargetCurve as PairingEngine>::G2Affine: ToConstraintField<<BaseCurve as PairingEngine>::Fr>,
 {
     fn to_constraint_field<CS: ConstraintSystem<<BaseCurve as PairingEngine>::Fr>>(
         &self,
@@ -357,12 +432,16 @@ where
         let mut res = Vec::new();
 
         let mut g_gadget = self.g.to_constraint_field(cs.ns(|| "g_to_constraint_field"))?;
+        let mut gamma_g_gadget = self
+            .gamma_g
+            .to_constraint_field(cs.ns(|| "gamma_g_to_constraint_field"))?;
         let mut h_gadget = self.h.to_constraint_field(cs.ns(|| "h_to_constraint_field"))?;
         let mut beta_h_gadget = self
             .beta_h
             .to_constraint_field(cs.ns(|| "beta_h_to_constraint_field"))?;
 
         res.append(&mut g_gadget);
+        res.append(&mut gamma_g_gadget);
         res.append(&mut h_gadget);
         res.append(&mut beta_h_gadget);
 
@@ -396,7 +475,7 @@ mod tests {
     use snarkvm_r1cs::TestConstraintSystem;
     use snarkvm_utilities::rand::test_rng;
 
-    use crate::{marlin_pc::MarlinKZG10, PolynomialCommitment};
+    use crate::{marlin_pc::MarlinKZG10, PCUniversalParams, PolynomialCommitment};
 
     use super::*;
 
@@ -495,7 +574,8 @@ mod tests {
         let pp = PC::setup(MAX_DEGREE, rng).unwrap();
 
         // Establish the bound
-        let bound = rng.gen_range(1..=SUPPORTED_DEGREE);
+        let supported_degree_bounds = pp.supported_degree_bounds();
+        let bound = supported_degree_bounds[rng.gen_range(0..supported_degree_bounds.len())];
 
         let bound_field = <BaseCurve as PairingEngine>::Fr::from_repr(
             <<BaseCurve as PairingEngine>::Fr as PrimeField>::BigInteger::from(bound as u64),

@@ -17,67 +17,67 @@
 use super::{
     create_random_proof,
     generate_random_parameters,
-    prepare_verifying_key,
     verify_proof,
     PreparedVerifyingKey,
     Proof,
     ProvingKey,
     VerifyingKey,
 };
-use crate::{errors::SNARKError, traits::SNARK};
+use crate::{SNARKError, SNARK, SRS};
 use snarkvm_curves::traits::PairingEngine;
 use snarkvm_fields::ToConstraintField;
 use snarkvm_r1cs::ConstraintSynthesizer;
 
-use rand::Rng;
+use rand::{CryptoRng, Rng};
 use std::{marker::PhantomData, sync::atomic::AtomicBool};
 
 /// Note: V should serialize its contents to `Vec<E::Fr>` in the same order as
 /// during the constraint generation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Groth16<E: PairingEngine, C: ConstraintSynthesizer<E::Fr>, V: ToConstraintField<E::Fr> + ?Sized> {
-    _engine: PhantomData<E>,
-    _circuit: PhantomData<C>,
-    _verifier_input: PhantomData<V>,
+pub struct Groth16<E: PairingEngine, V: ToConstraintField<E::Fr> + Clone> {
+    _phantom: PhantomData<(E, V)>,
 }
 
-impl<E: PairingEngine, C: ConstraintSynthesizer<E::Fr>, V: ToConstraintField<E::Fr> + ?Sized> SNARK
-    for Groth16<E, C, V>
-{
-    type AllocatedCircuit = C;
-    type Circuit = C;
+impl<E: PairingEngine, V: ToConstraintField<E::Fr> + Clone> SNARK for Groth16<E, V> {
+    type BaseField = E::Fq;
     type PreparedVerifyingKey = PreparedVerifyingKey<E>;
     type Proof = Proof<E>;
     type ProvingKey = ProvingKey<E>;
+    type ScalarField = E::Fr;
+    type UniversalSetupConfig = usize;
+    type UniversalSetupParameters = ();
     type VerifierInput = V;
     type VerifyingKey = VerifyingKey<E>;
 
-    fn setup<R: Rng>(
-        circuit: &Self::Circuit,
-        rng: &mut R,
-    ) -> Result<(Self::ProvingKey, Self::PreparedVerifyingKey), SNARKError> {
+    fn setup<C: ConstraintSynthesizer<E::Fr>, R: Rng + CryptoRng>(
+        circuit: &C,
+        srs: &mut SRS<R, Self::UniversalSetupParameters>,
+    ) -> Result<(Self::ProvingKey, Self::VerifyingKey), SNARKError> {
         let setup_time = start_timer!(|| "{Groth 2016}::Setup");
-        let pp = generate_random_parameters::<E, Self::Circuit, R>(circuit, rng)?;
-        let vk = prepare_verifying_key(pp.vk.clone());
+        let pp = match srs {
+            SRS::CircuitSpecific(rng) => generate_random_parameters::<E, C, _>(circuit, *rng)?,
+            _ => return Err(SNARKError::ExpectedCircuitSpecificSRS),
+        };
+        let vk = pp.vk.clone();
         end_timer!(setup_time);
         Ok((pp, vk))
     }
 
     // terminator not implemented for Groth16
-    fn prove_with_terminator<R: Rng>(
+    fn prove_with_terminator<C: ConstraintSynthesizer<E::Fr>, R: Rng + CryptoRng>(
         proving_key: &Self::ProvingKey,
-        input_and_witness: &Self::AllocatedCircuit,
+        input_and_witness: &C,
         _terminator: &AtomicBool,
         rng: &mut R,
     ) -> Result<Self::Proof, SNARKError> {
         let proof_time = start_timer!(|| "{Groth 2016}::Prove");
-        let result = create_random_proof::<E, _, _>(input_and_witness, proving_key, rng)?;
+        let result = create_random_proof::<E, C, _>(input_and_witness, proving_key, rng)?;
         end_timer!(proof_time);
         Ok(result)
     }
 
-    fn verify(
-        verifying_key: &Self::PreparedVerifyingKey,
+    fn verify_prepared(
+        prepared_verifying_key: &Self::PreparedVerifyingKey,
         input: &Self::VerifierInput,
         proof: &Self::Proof,
     ) -> Result<bool, SNARKError> {
@@ -86,7 +86,7 @@ impl<E: PairingEngine, C: ConstraintSynthesizer<E::Fr>, V: ToConstraintField<E::
         let input = input.to_field_elements()?;
         end_timer!(conversion_time);
         let verification = start_timer!(|| format!("Verify proof w/ input len: {}", input.len()));
-        let result = verify_proof(&verifying_key, proof, &input)?;
+        let result = verify_proof(&prepared_verifying_key, proof, &input)?;
         end_timer!(verification);
         end_timer!(verify_time);
         Ok(result)

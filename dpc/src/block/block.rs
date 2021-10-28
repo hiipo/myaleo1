@@ -15,79 +15,404 @@
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::{
-    traits::{BlockScheme, TransactionScheme},
-    BlockError,
+    Address,
+    AleoAmount,
     BlockHeader,
+    LedgerProof,
+    LedgerTree,
+    LedgerTreeScheme,
+    Network,
+    Transaction,
     Transactions,
 };
-use snarkvm_utilities::{to_bytes_le, variable_length_integer::variable_length_integer, FromBytes, ToBytes};
+use snarkvm_algorithms::CRH;
+use snarkvm_utilities::{to_bytes_le, FromBytes, ToBytes};
 
-use std::io::{Read, Result as IoResult, Write};
+use anyhow::{anyhow, Result};
+use rand::{CryptoRng, Rng};
+use std::{
+    io::{Read, Result as IoResult, Write},
+    sync::atomic::AtomicBool,
+    time::Instant,
+};
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Block<T: TransactionScheme> {
-    /// First `HEADER_SIZE` bytes of the block as defined by the encoding used by "block" messages.
-    pub header: BlockHeader,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Block<N: Network> {
+    /// Hash of this block.
+    block_hash: N::BlockHash,
+    /// Hash of the previous block.
+    previous_block_hash: N::BlockHash,
+    /// The block header containing the state of the ledger at this block.
+    header: BlockHeader<N>,
     /// The block transactions.
-    pub transactions: Transactions<T>,
+    transactions: Transactions<N>,
 }
 
-impl<T: TransactionScheme> BlockScheme for Block<T> {
-    type BlockHeader = BlockHeader;
-    type Transaction = T;
+impl<N: Network> Block<N> {
+    /// Initializes a new block.
+    pub fn mine<R: Rng + CryptoRng>(
+        previous_block_hash: N::BlockHash,
+        block_height: u32,
+        block_timestamp: i64,
+        difficulty_target: u64,
+        ledger_root: N::LedgerRoot,
+        transactions: Transactions<N>,
+        terminator: &AtomicBool,
+        rng: &mut R,
+    ) -> Result<Self> {
+        assert!(!(*transactions).is_empty(), "Cannot create block with no transactions");
+
+        // Compute the block header.
+        let header = BlockHeader::mine(
+            block_height,
+            block_timestamp,
+            difficulty_target,
+            ledger_root,
+            transactions.to_transactions_root()?,
+            terminator,
+            rng,
+        )?;
+
+        Self::from(previous_block_hash, header, transactions)
+    }
+
+    /// Initializes a new genesis block with one coinbase transaction.
+    pub fn new_genesis<R: Rng + CryptoRng>(recipient: Address<N>, rng: &mut R) -> Result<Self> {
+        // Compute the coinbase transaction.
+        let start = Instant::now();
+        let transactions = Transactions::from(&[Transaction::new_coinbase(recipient, Self::block_reward(0), rng)?])?;
+        println!("{} seconds", (Instant::now() - start).as_secs());
+
+        // Compute the transactions root from the transactions.
+        let transactions_root = transactions.to_transactions_root()?;
+
+        // Construct the genesis block header metadata.
+        let block_height = 0u32;
+        let block_timestamp = 0i64;
+        let difficulty_target = u64::MAX;
+
+        // Compute the genesis block header.
+        let header = BlockHeader::mine(
+            block_height,
+            block_timestamp,
+            difficulty_target,
+            LedgerTree::<N>::new()?.root(),
+            transactions_root,
+            &AtomicBool::new(false),
+            rng,
+        )?;
+
+        // Construct the previous block hash.
+        let previous_block_hash = LedgerProof::<N>::default().block_hash();
+
+        // Construct the genesis block.
+        let block = Self::from(previous_block_hash, header, transactions)?;
+
+        // Ensure the block is valid genesis block.
+        match block.is_genesis() {
+            true => Ok(block),
+            false => Err(anyhow!("Failed to initialize a genesis block")),
+        }
+    }
+
+    /// Initializes a new block from a given previous hash, header, and transactions list.
+    pub fn from(
+        previous_block_hash: N::BlockHash,
+        header: BlockHeader<N>,
+        transactions: Transactions<N>,
+    ) -> Result<Self> {
+        // Compute the block hash.
+        let block_hash = N::block_hash_crh().hash(&to_bytes_le![previous_block_hash, header.to_header_root()?]?)?;
+
+        // Construct the block.
+        let block = Self {
+            block_hash,
+            previous_block_hash,
+            header,
+            transactions,
+        };
+
+        // Ensure the block is valid.
+        match block.is_valid() {
+            true => Ok(block),
+            false => Err(anyhow!("Failed to initialize a block from given inputs")),
+        }
+    }
+
+    /// Returns `true` if the block is well-formed.
+    pub fn is_valid(&self) -> bool {
+        // Ensure the previous block hash is well-formed.
+        let genesis_previous_block_hash = LedgerProof::<N>::default().block_hash();
+        if self.height() == 0u32 {
+            if self.previous_block_hash != genesis_previous_block_hash {
+                eprintln!("Genesis block must have the default ledger proof block hash");
+                return false;
+            }
+        } else if self.previous_block_hash == genesis_previous_block_hash {
+            eprintln!("Block cannot have genesis previous block hash");
+            return false;
+        } else if self.previous_block_hash == Default::default() {
+            eprintln!("Block must have a non-empty previous block hash");
+            return false;
+        }
+
+        // Ensure the header are valid.
+        if !self.header.is_valid() {
+            eprintln!("Invalid block header");
+            return false;
+        }
+
+        // Ensure the transactions are valid.
+        if !self.transactions.is_valid() {
+            eprintln!("Invalid block transactions");
+            return false;
+        }
+
+        // Fetch the transactions root.
+        let transactions_root = match self.transactions.to_transactions_root() {
+            Ok(transactions_root) => transactions_root,
+            Err(error) => {
+                eprintln!("{}", error);
+                return false;
+            }
+        };
+
+        // Ensure the transactions root matches the computed root from the transactions list.
+        if self.header.transactions_root() != transactions_root {
+            eprintln!("Invalid block transactions does not match transactions root in header");
+            return false;
+        }
+
+        // Retrieve the coinbase transaction.
+        let coinbase_transaction = match self.to_coinbase_transaction() {
+            Ok(coinbase_transaction) => coinbase_transaction,
+            Err(error) => {
+                eprintln!("{}", error);
+                return false;
+            }
+        };
+
+        // Ensure the coinbase reward is equal to or greater than the expected block reward.
+        let coinbase_reward = AleoAmount::ZERO.sub(coinbase_transaction.value_balance()); // Make it a positive number.
+        let block_reward = Self::block_reward(self.height());
+        if coinbase_reward < block_reward {
+            eprintln!("Coinbase reward must be >= {}, found {}", block_reward, coinbase_reward);
+            return false;
+        }
+
+        // Ensure the coinbase reward less transaction fees is less than or equal to the block reward.
+        match self.transactions.to_net_value_balance() {
+            Ok(net_value_balance) => {
+                let candidate_block_reward = AleoAmount::ZERO.sub(net_value_balance); // Make it a positive number.
+                if candidate_block_reward > block_reward {
+                    eprintln!("Block reward must be <= {}", block_reward);
+                    return false;
+                }
+            }
+            Err(error) => {
+                eprintln!("{}", error);
+                return false;
+            }
+        };
+
+        true
+    }
+
+    /// Returns `true` if the block is a genesis block.
+    pub fn is_genesis(&self) -> bool {
+        // Ensure the header is a genesis block header.
+        self.header.is_genesis()
+    }
+
+    /// Returns the hash of this block.
+    pub fn block_hash(&self) -> N::BlockHash {
+        self.block_hash
+    }
+
+    /// Returns the previous block hash.
+    pub fn previous_block_hash(&self) -> N::BlockHash {
+        self.previous_block_hash
+    }
 
     /// Returns the header.
-    fn header(&self) -> &Self::BlockHeader {
+    pub fn header(&self) -> &BlockHeader<N> {
         &self.header
     }
 
     /// Returns the transactions.
-    fn transactions(&self) -> &[Self::Transaction] {
-        self.transactions.as_slice()
+    pub fn transactions(&self) -> &Transactions<N> {
+        &self.transactions
+    }
+
+    /// Returns the ledger root in the block header.
+    pub fn ledger_root(&self) -> N::LedgerRoot {
+        self.header.ledger_root()
+    }
+
+    /// Returns the transactions root in the block header.
+    pub fn transactions_root(&self) -> N::TransactionsRoot {
+        self.header.transactions_root()
+    }
+
+    /// Returns the block height.
+    pub fn height(&self) -> u32 {
+        self.header.height()
+    }
+
+    /// Returns the block timestamp.
+    pub fn timestamp(&self) -> i64 {
+        self.header.timestamp()
+    }
+
+    /// Returns the block difficulty target.
+    pub fn difficulty_target(&self) -> u64 {
+        self.header.difficulty_target()
+    }
+
+    /// Returns the block nonce.
+    pub fn nonce(&self) -> N::InnerScalarField {
+        self.header.nonce()
+    }
+
+    /// Returns the serial numbers in the block, by constructing a flattened list of serial numbers from all transactions.
+    pub fn serial_numbers(&self) -> Vec<N::SerialNumber> {
+        self.transactions.serial_numbers().collect()
+    }
+
+    /// Returns the commitments in the block, by constructing a flattened list of commitments from all transactions.
+    pub fn commitments(&self) -> Vec<N::Commitment> {
+        self.transactions.commitments().collect()
+    }
+
+    /// Returns the coinbase transaction for the block.
+    pub fn to_coinbase_transaction(&self) -> Result<Transaction<N>> {
+        // Filter out all transactions with a positive value balance.
+        let coinbase_transaction: Vec<_> = self
+            .transactions
+            .iter()
+            .filter(|t| t.value_balance().is_negative())
+            .collect();
+
+        // Ensure there is exactly 1 coinbase transaction.
+        let num_coinbase = coinbase_transaction.len();
+        match num_coinbase == 1 {
+            true => Ok(coinbase_transaction[0].clone()),
+            false => Err(anyhow!(
+                "Block must have 1 coinbase transaction, found {}",
+                num_coinbase
+            )),
+        }
+    }
+
+    ///
+    /// Returns the block reward for the given block height.
+    ///
+    /// TODO (howardwu): CRITICAL - Update this with the correct emission schedule.
+    ///
+    pub fn block_reward(height: u32) -> AleoAmount {
+        match height == 0 {
+            true => {
+                // Output the starting supply as the genesis block reward.
+                AleoAmount::from_bytes(N::ALEO_STARTING_SUPPLY_IN_CREDITS * AleoAmount::ONE_CREDIT.0)
+            }
+            false => {
+                let expected_blocks_per_hour: u32 = 180;
+                let num_years = 3;
+                let block_segments = num_years * 365 * 24 * expected_blocks_per_hour;
+
+                // The block reward halves at most 2 times - minimum is 37.5 ALEO after 8 years.
+                let initial_reward = 150i64 * AleoAmount::ONE_CREDIT.0;
+                let num_halves = u32::min(height / block_segments, 2);
+                let reward = initial_reward / (2_u64.pow(num_halves)) as i64;
+
+                AleoAmount::from_bytes(reward)
+            }
+        }
     }
 }
 
-impl<T: TransactionScheme> ToBytes for Block<T> {
+impl<N: Network> FromBytes for Block<N> {
+    #[inline]
+    fn read_le<R: Read>(mut reader: R) -> IoResult<Self> {
+        let previous_block_hash = FromBytes::read_le(&mut reader)?;
+        let header = FromBytes::read_le(&mut reader)?;
+        let transactions = FromBytes::read_le(&mut reader)?;
+
+        Ok(Self::from(previous_block_hash, header, transactions).expect("Failed to deserialize a block"))
+    }
+}
+
+impl<N: Network> ToBytes for Block<N> {
     #[inline]
     fn write_le<W: Write>(&self, mut writer: W) -> IoResult<()> {
+        self.previous_block_hash.write_le(&mut writer)?;
         self.header.write_le(&mut writer)?;
         self.transactions.write_le(&mut writer)
     }
 }
 
-impl<T: TransactionScheme> FromBytes for Block<T> {
-    #[inline]
-    fn read_le<R: Read>(mut reader: R) -> IoResult<Self> {
-        let header: BlockHeader = FromBytes::read_le(&mut reader)?;
-        let transactions: Transactions<T> = FromBytes::read_le(&mut reader)?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{testnet2::Testnet2, Account, AccountScheme};
 
-        Ok(Self { header, transactions })
+    use rand::{thread_rng, Rng};
+
+    const ITERATIONS: usize = 1000;
+
+    #[test]
+    fn test_block_genesis() {
+        let rng = &mut thread_rng();
+
+        let account = Account::<Testnet2>::new(rng);
+        let genesis_block = Block::<Testnet2>::new_genesis(account.address(), rng).unwrap();
+        println!("{:?}", genesis_block);
     }
-}
 
-impl<T: TransactionScheme> Block<T> {
-    pub fn serialize(&self) -> Result<Vec<u8>, BlockError> {
-        let mut serialization = vec![];
-        serialization.extend(&self.header.serialize().to_vec());
-        serialization.extend(&variable_length_integer(self.transactions.len() as u64));
+    #[test]
+    fn test_block_rewards() {
+        let rng = &mut thread_rng();
 
-        for transaction in self.transactions.iter() {
-            serialization.extend(to_bytes_le![transaction]?)
+        let first_halving: u32 = 3 * 365 * 24 * 180;
+        let second_halving: u32 = first_halving * 2;
+
+        // Genesis
+
+        assert_eq!(
+            Block::<Testnet2>::block_reward(0).0,
+            Testnet2::ALEO_STARTING_SUPPLY_IN_CREDITS * 1_000_000
+        );
+
+        // Before block halving
+
+        let mut block_reward: i64 = 150 * 1_000_000;
+
+        for _ in 0..ITERATIONS {
+            let block_height: u32 = rng.gen_range(0..first_halving);
+            assert_eq!(Block::<Testnet2>::block_reward(block_height).0, block_reward);
         }
 
-        Ok(serialization)
-    }
+        // First block halving
 
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, BlockError> {
-        const HEADER_SIZE: usize = BlockHeader::size();
-        let (header_bytes, transactions_bytes) = bytes.split_at(HEADER_SIZE);
+        block_reward /= 2;
 
-        let mut header_array = [0u8; HEADER_SIZE];
-        header_array.copy_from_slice(&header_bytes[0..HEADER_SIZE]);
-        let header = BlockHeader::deserialize(&header_array);
+        assert_eq!(Block::<Testnet2>::block_reward(first_halving).0, block_reward);
 
-        let transactions: Transactions<T> = FromBytes::read_le(transactions_bytes)?;
+        for _ in 0..ITERATIONS {
+            let block_num: u32 = rng.gen_range((first_halving + 1)..second_halving);
+            assert_eq!(Block::<Testnet2>::block_reward(block_num).0, block_reward);
+        }
 
-        Ok(Block { header, transactions })
+        // Second and final block halving
+
+        block_reward /= 2;
+
+        assert_eq!(Block::<Testnet2>::block_reward(second_halving).0, block_reward);
+        assert_eq!(Block::<Testnet2>::block_reward(u32::MAX).0, block_reward);
+
+        for _ in 0..ITERATIONS {
+            let block_num: u32 = rng.gen_range(second_halving..u32::MAX);
+            assert_eq!(Block::<Testnet2>::block_reward(block_num).0, block_reward);
+        }
     }
 }

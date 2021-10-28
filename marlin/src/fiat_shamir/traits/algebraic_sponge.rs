@@ -14,10 +14,13 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::Vec;
 use snarkvm_fields::PrimeField;
 
+use core::fmt::Debug;
+
 /// Trait for an algebraic sponge.
-pub trait AlgebraicSponge<BaseField: PrimeField>: Clone {
+pub trait AlgebraicSponge<BaseField: PrimeField>: Clone + Debug {
     /// Initializes an algebraic sponge.
     fn new() -> Self;
     /// Takes in field elements.

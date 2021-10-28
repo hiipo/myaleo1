@@ -19,18 +19,11 @@ use snarkvm_fields::PrimeField;
 use snarkvm_polycommit::{BatchLCProof, PCCommitment, PolynomialCommitment};
 use snarkvm_utilities::{error, errors::SerializationError, serialize::*, FromBytes, ToBytes};
 
-use derivative::Derivative;
-use std::io::{
-    Read,
-    Write,
-    {self},
-};
+use crate::{Read, Write};
 
 /// A zkSNARK proof.
-#[derive(Derivative)]
-#[derivative(Debug(bound = ""), Clone(bound = ""))]
-#[derive(CanonicalSerialize, CanonicalDeserialize)]
-pub struct Proof<F: PrimeField, PC: PolynomialCommitment<F>> {
+#[derive(Clone, Debug, PartialEq, Eq, CanonicalSerialize, CanonicalDeserialize)]
+pub struct Proof<F: PrimeField, CF: PrimeField, PC: PolynomialCommitment<F, CF>> {
     /// Commitments to the polynomials produced by the AHP prover.
     pub commitments: Vec<Vec<PC::Commitment>>,
     /// Evaluations of these polynomials.
@@ -38,16 +31,16 @@ pub struct Proof<F: PrimeField, PC: PolynomialCommitment<F>> {
     /// The field elements sent by the prover.
     pub prover_messages: Vec<ProverMessage<F>>,
     /// An evaluation proof from the polynomial commitment.
-    pub pc_proof: BatchLCProof<F, PC>,
+    pub pc_proof: BatchLCProof<F, CF, PC>,
 }
 
-impl<F: PrimeField, PC: PolynomialCommitment<F>> Proof<F, PC> {
+impl<F: PrimeField, CF: PrimeField, PC: PolynomialCommitment<F, CF>> Proof<F, CF, PC> {
     /// Construct a new proof.
     pub fn new(
         commitments: Vec<Vec<PC::Commitment>>,
         evaluations: Vec<F>,
         prover_messages: Vec<ProverMessage<F>>,
-        pc_proof: BatchLCProof<F, PC>,
+        pc_proof: BatchLCProof<F, CF, PC>,
     ) -> Self {
         Self {
             commitments,
@@ -118,14 +111,14 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>> Proof<F, PC> {
     }
 }
 
-impl<F: PrimeField, PC: PolynomialCommitment<F>> ToBytes for Proof<F, PC> {
-    fn write_le<W: Write>(&self, mut w: W) -> io::Result<()> {
+impl<F: PrimeField, CF: PrimeField, PC: PolynomialCommitment<F, CF>> ToBytes for Proof<F, CF, PC> {
+    fn write_le<W: Write>(&self, mut w: W) -> crate::io::Result<()> {
         CanonicalSerialize::serialize(self, &mut w).map_err(|_| error("could not serialize Proof"))
     }
 }
 
-impl<F: PrimeField, PC: PolynomialCommitment<F>> FromBytes for Proof<F, PC> {
-    fn read_le<R: Read>(mut r: R) -> io::Result<Self> {
+impl<F: PrimeField, CF: PrimeField, PC: PolynomialCommitment<F, CF>> FromBytes for Proof<F, CF, PC> {
+    fn read_le<R: Read>(mut r: R) -> crate::io::Result<Self> {
         CanonicalDeserialize::deserialize(&mut r).map_err(|_| error("could not deserialize Proof"))
     }
 }

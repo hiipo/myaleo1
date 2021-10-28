@@ -14,62 +14,43 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{errors::EncryptionError, traits::SignatureScheme};
-use snarkvm_utilities::{rand::UniformRand, FromBytes, ToBytes};
+use crate::EncryptionError;
+use snarkvm_utilities::{rand::UniformRand, FromBytes, ToBits, ToBytes};
 
-use rand::Rng;
+use rand::{CryptoRng, Rng};
 use std::{fmt::Debug, hash::Hash};
 
-pub trait EncryptionScheme: Sized + Clone + From<<Self as EncryptionScheme>::Parameters> + SignatureScheme {
-    type Parameters: Clone + Debug + Eq + ToBytes + FromBytes;
-    type PrivateKey: Clone
-        + Debug
-        + Default
-        + Eq
-        + Hash
-        + ToBytes
-        + FromBytes
-        + UniformRand
-        + Into<<Self as SignatureScheme>::PrivateKey>;
-    type PublicKey: Clone + Debug + Default + Eq + ToBytes + FromBytes + Into<<Self as SignatureScheme>::PublicKey>;
-    type Text: Clone + Debug + Default + Eq + ToBytes + FromBytes;
-    type Randomness: Clone + Debug + Default + Eq + Hash + ToBytes + FromBytes + UniformRand;
-    type BlindingExponent: Clone + Debug + Default + Eq + Hash + ToBytes;
+pub trait EncryptionScheme:
+    Sized + ToBytes + FromBytes + Debug + Clone + Eq + From<<Self as EncryptionScheme>::Parameters>
+{
+    type Parameters: Clone + Debug + Eq;
+    type PrivateKey: Clone + Debug + Default + Eq + Hash + ToBytes + FromBytes + ToBits + UniformRand;
+    type PublicKey: Copy + Clone + Debug + Default + Eq + ToBytes + FromBytes;
+    type Randomness: Copy + Clone + Debug + Default + Eq + Hash + ToBytes + FromBytes + UniformRand;
 
-    fn setup<R: Rng>(rng: &mut R) -> Self;
+    fn setup(message: &str) -> Self;
 
-    fn generate_private_key<R: Rng>(&self, rng: &mut R) -> <Self as EncryptionScheme>::PrivateKey;
+    fn generate_private_key<R: Rng + CryptoRng>(&self, rng: &mut R) -> <Self as EncryptionScheme>::PrivateKey;
 
     fn generate_public_key(
         &self,
         private_key: &<Self as EncryptionScheme>::PrivateKey,
-    ) -> Result<<Self as EncryptionScheme>::PublicKey, EncryptionError>;
+    ) -> <Self as EncryptionScheme>::PublicKey;
 
-    fn generate_randomness<R: Rng>(
-        &self,
-        public_key: &<Self as EncryptionScheme>::PublicKey,
-        rng: &mut R,
-    ) -> Result<Self::Randomness, EncryptionError>;
-
-    fn generate_blinding_exponents(
-        &self,
-        public_key: &<Self as EncryptionScheme>::PublicKey,
-        randomness: &Self::Randomness,
-        message_length: usize,
-    ) -> Result<Vec<Self::BlindingExponent>, EncryptionError>;
+    fn generate_randomness<R: Rng + CryptoRng>(&self, rng: &mut R) -> Self::Randomness;
 
     fn encrypt(
         &self,
         public_key: &<Self as EncryptionScheme>::PublicKey,
         randomness: &Self::Randomness,
-        message: &[Self::Text],
-    ) -> Result<Vec<Self::Text>, EncryptionError>;
+        message: &[u8],
+    ) -> Result<Vec<u8>, EncryptionError>;
 
     fn decrypt(
         &self,
         private_key: &<Self as EncryptionScheme>::PrivateKey,
-        ciphertext: &[Self::Text],
-    ) -> Result<Vec<Self::Text>, EncryptionError>;
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, EncryptionError>;
 
     fn parameters(&self) -> &<Self as EncryptionScheme>::Parameters;
 

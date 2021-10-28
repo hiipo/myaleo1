@@ -42,20 +42,32 @@ extern crate alloc;
 #[rustfmt::skip]
 #[cfg(not(feature = "std"))]
 use alloc::{
-    collections::BTreeMap,
-    marker::PhantomData,
+    collections::{BTreeSet, BTreeMap},
     string::{String, ToString},
     vec::Vec,
+};
+
+#[cfg(not(feature = "std"))]
+use core::marker::PhantomData;
+
+#[cfg(not(feature = "std"))]
+use snarkvm_utilities::io::{
+    Read,
+    Result as IoResult,
+    Write,
+    {self},
 };
 
 #[rustfmt::skip]
 #[cfg(feature = "std")]
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeSet, BTreeMap},
     marker::PhantomData,
     string::{String, ToString},
     vec::Vec,
+    io::{Read, Write, Result as IoResult, {self}},
 };
+use snarkvm_polycommit::PolynomialCommitment;
 
 #[cfg(not(feature = "std"))]
 macro_rules! eprintln {
@@ -72,14 +84,6 @@ pub mod constraints;
 
 /// Implements the base Marlin zkSNARK proof system.
 pub mod marlin;
-
-/// The Marlin public parameters for a given circuit.
-pub mod parameters;
-pub use parameters::*;
-
-/// Implements the snarkVM-compatible Marlin SNARK interface.
-pub mod snark;
-pub use snark::*;
 
 /// RNGs for the Marlin SNARK.
 pub mod fiat_shamir;

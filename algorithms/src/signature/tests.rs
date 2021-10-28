@@ -14,93 +14,120 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{encryption::GroupEncryption, signature::Schnorr, traits::SignatureScheme};
-use snarkvm_curves::{
-    edwards_bls12::{EdwardsAffine, EdwardsProjective},
-    edwards_bw6::EdwardsAffine as Edwards,
-    traits::Group,
-};
-use snarkvm_utilities::{rand::UniformRand, to_bytes_le, FromBytes, ToBytes};
+use crate::SignatureScheme;
+use snarkvm_utilities::FromBytes;
 
-use blake2::Blake2s;
-use rand::SeedableRng;
-use rand_xorshift::XorShiftRng;
-
-type TestSignature = Schnorr<Edwards, Blake2s>;
-type TestGroupEncryptionSignature = GroupEncryption<EdwardsProjective, EdwardsAffine, Blake2s>;
+use rand::thread_rng;
 
 fn sign_and_verify<S: SignatureScheme>(message: &[u8]) {
-    let rng = &mut XorShiftRng::seed_from_u64(1231275789u64);
-    let schnorr_signature = S::setup::<_>(rng).unwrap();
-    let private_key = schnorr_signature.generate_private_key(rng).unwrap();
-    let public_key = schnorr_signature.generate_public_key(&private_key).unwrap();
-    let signature = schnorr_signature.sign(&private_key, message, rng).unwrap();
-    assert!(schnorr_signature.verify(&public_key, &message, &signature).unwrap());
+    let rng = &mut thread_rng();
+    let signature_scheme = S::setup("sign_and_verify");
+
+    let private_key = signature_scheme.generate_private_key(rng);
+    let public_key = signature_scheme.generate_public_key(&private_key);
+    let signature = signature_scheme.sign(&private_key, message, rng).unwrap();
+    assert!(signature_scheme.verify(&public_key, &message, &signature).unwrap());
 }
 
 fn failed_verification<S: SignatureScheme>(message: &[u8], bad_message: &[u8]) {
-    let rng = &mut XorShiftRng::seed_from_u64(1231275789u64);
-    let schnorr_signature = S::setup::<_>(rng).unwrap();
-    let private_key = schnorr_signature.generate_private_key(rng).unwrap();
-    let public_key = schnorr_signature.generate_public_key(&private_key).unwrap();
-    let signature = schnorr_signature.sign(&private_key, message, rng).unwrap();
-    assert!(!schnorr_signature.verify(&public_key, bad_message, &signature).unwrap());
+    let rng = &mut thread_rng();
+    let signature_scheme = S::setup("failed_verification");
+
+    let private_key = signature_scheme.generate_private_key(rng);
+    let public_key = signature_scheme.generate_public_key(&private_key);
+    let signature = signature_scheme.sign(&private_key, message, rng).unwrap();
+    assert!(!signature_scheme.verify(&public_key, bad_message, &signature).unwrap());
 }
 
-fn randomize_and_verify<S: SignatureScheme>(message: &[u8], randomness: &[u8]) {
-    let rng = &mut XorShiftRng::seed_from_u64(1231275789u64);
-    let schnorr_signature = S::setup::<_>(rng).unwrap();
-    let private_key = schnorr_signature.generate_private_key(rng).unwrap();
-    let public_key = schnorr_signature.generate_public_key(&private_key).unwrap();
-    let signature = schnorr_signature.sign(&private_key, message, rng).unwrap();
-    assert!(schnorr_signature.verify(&public_key, message, &signature).unwrap());
-
-    let randomized_public_key = schnorr_signature.randomize_public_key(&public_key, randomness).unwrap();
-    let randomized_signature = schnorr_signature.randomize_signature(&signature, randomness).unwrap();
-    assert!(
-        schnorr_signature
-            .verify(&randomized_public_key, &message, &randomized_signature)
-            .unwrap()
-    );
+fn signature_scheme_serialization<S: SignatureScheme>() {
+    let signature_scheme = S::setup("signature_scheme_serialization");
+    let recovered_signature_scheme: S = FromBytes::read_le(&signature_scheme.to_bytes_le().unwrap()[..]).unwrap();
+    assert_eq!(signature_scheme, recovered_signature_scheme);
 }
 
-fn signature_scheme_parameter_serialization<S: SignatureScheme>() {
-    let rng = &mut XorShiftRng::seed_from_u64(1231275789u64);
+mod aleo {
+    use super::*;
+    use crate::signature::{AleoSignature, AleoSignatureScheme};
+    use snarkvm_curves::{
+        edwards_bls12::EdwardsParameters as EdwardsBls12,
+        edwards_bw6::EdwardsParameters as EdwardsBW6,
+    };
+    use snarkvm_utilities::{str::FromStr, FromBytes, ToBytes};
 
-    let signature_scheme = S::setup(rng).unwrap();
-    let signature_scheme_parameters = signature_scheme.parameters();
+    #[test]
+    fn test_aleo_signature_on_edwards_bls12_377() {
+        type TestSignature = AleoSignatureScheme<EdwardsBls12>;
 
-    let signature_scheme_parameters_bytes = to_bytes_le![signature_scheme_parameters].unwrap();
-    let recovered_signature_scheme_parameters: <S as SignatureScheme>::Parameters =
-        FromBytes::read_le(&signature_scheme_parameters_bytes[..]).unwrap();
+        let message = "Hi, I am an Aleo signature!";
+        sign_and_verify::<TestSignature>(message.as_bytes());
+        failed_verification::<TestSignature>(message.as_bytes(), b"Bad message");
+    }
 
-    assert_eq!(signature_scheme_parameters, &recovered_signature_scheme_parameters);
-}
+    #[test]
+    fn test_aleo_signature_on_edwards_bw6() {
+        type TestSignature = AleoSignatureScheme<EdwardsBW6>;
 
-#[test]
-fn schnorr_signature_test() {
-    let message = "Hi, I am a Schnorr signature!";
-    let rng = &mut XorShiftRng::seed_from_u64(1231275789u64);
-    sign_and_verify::<TestSignature>(message.as_bytes());
-    failed_verification::<TestSignature>(message.as_bytes(), b"Bad message");
-    let random_scalar = to_bytes_le!(<Edwards as Group>::ScalarField::rand(rng)).unwrap();
-    randomize_and_verify::<TestSignature>(message.as_bytes(), &random_scalar.as_slice());
-}
+        let message = "Hi, I am an Aleo signature!";
+        sign_and_verify::<TestSignature>(message.as_bytes());
+        failed_verification::<TestSignature>(message.as_bytes(), b"Bad message");
+    }
 
-#[test]
-fn schnorr_signature_scheme_parameters_serialization() {
-    signature_scheme_parameter_serialization::<TestSignature>();
-}
+    #[test]
+    fn aleo_signature_scheme_serialization() {
+        signature_scheme_serialization::<AleoSignatureScheme<EdwardsBls12>>();
+        signature_scheme_serialization::<AleoSignatureScheme<EdwardsBW6>>();
+    }
 
-#[test]
-fn group_encryption_signature_test() {
-    // Test the encryption scheme's Schnorr signature implementation, excluding randomized signatures
-    let message = "Hi, I am a Group Encryption signature!";
-    sign_and_verify::<TestGroupEncryptionSignature>(message.as_bytes());
-    failed_verification::<TestGroupEncryptionSignature>(message.as_bytes(), "Bad message".as_bytes());
-}
+    #[test]
+    fn test_serde_json() {
+        type TestSignature = AleoSignatureScheme<EdwardsBls12>;
 
-#[test]
-fn group_encryption_signature_scheme_parameters_serialization() {
-    signature_scheme_parameter_serialization::<TestGroupEncryptionSignature>();
+        let expected_signature = {
+            let rng = &mut thread_rng();
+            let signature_scheme = TestSignature::setup("test_serde_json");
+            let private_key = signature_scheme.generate_private_key(rng);
+            let message = b"Hi, I am an Aleo signature!";
+            signature_scheme.sign(&private_key, message, rng).unwrap()
+        };
+
+        // Serialize
+        let expected_string = &expected_signature.to_string();
+        let candidate_string = serde_json::to_string(&expected_signature).unwrap();
+        assert_eq!(258, candidate_string.len(), "Update me if serialization has changed");
+        assert_eq!(
+            expected_string,
+            serde_json::Value::from_str(&candidate_string)
+                .unwrap()
+                .as_str()
+                .unwrap()
+        );
+
+        // Deserialize
+        assert_eq!(expected_signature, serde_json::from_str(&candidate_string).unwrap());
+        assert_eq!(expected_signature, AleoSignature::from_str(&expected_string).unwrap());
+    }
+
+    #[test]
+    fn test_bincode() {
+        type TestSignature = AleoSignatureScheme<EdwardsBls12>;
+
+        let expected_signature = {
+            let rng = &mut thread_rng();
+            let signature_scheme = TestSignature::setup("test_bincode");
+            let private_key = signature_scheme.generate_private_key(rng);
+            let message = b"Hi, I am an Aleo signature!";
+            signature_scheme.sign(&private_key, message, rng).unwrap()
+        };
+
+        // Serialize
+        let expected_bytes = expected_signature.to_bytes_le().unwrap();
+        assert_eq!(
+            &expected_bytes[..],
+            &bincode::serialize(&expected_signature).unwrap()[..]
+        );
+
+        // Deserialize
+        assert_eq!(expected_signature, bincode::deserialize(&expected_bytes[..]).unwrap());
+        assert_eq!(expected_signature, AleoSignature::read_le(&expected_bytes[..]).unwrap());
+    }
 }

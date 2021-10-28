@@ -14,10 +14,9 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{ahp::AHPError, marlin::MarlinError};
+use crate::{ahp::AHPError, marlin::MarlinError, String, ToString};
 
-use core::fmt::Display;
-use std::fmt::{Debug, Formatter};
+use core::fmt::{Debug, Display, Formatter};
 
 /// Error handling for Marlin constraints.
 pub struct MarlinConstraintsError {

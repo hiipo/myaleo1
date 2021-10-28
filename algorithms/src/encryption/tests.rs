@@ -14,57 +14,69 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{encryption::GroupEncryption, traits::EncryptionScheme};
-use snarkvm_curves::{
-    edwards_bls12::{EdwardsAffine, EdwardsProjective},
-    traits::{Group, ProjectiveCurve},
-};
-use snarkvm_utilities::{to_bytes_le, FromBytes, ToBytes};
+mod ecies {
+    use crate::{encryption::ECIESPoseidonEncryption, EncryptionScheme};
+    use snarkvm_curves::edwards_bls12::EdwardsParameters;
+    use snarkvm_utilities::{FromBytes, ToBytes, UniformRand};
 
-use blake2::Blake2s;
-use rand::{Rng, SeedableRng};
-use rand_xorshift::XorShiftRng;
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaChaRng;
 
-type TestEncryptionScheme = GroupEncryption<EdwardsProjective, EdwardsAffine, Blake2s>;
+    pub const ITERATIONS: usize = 1000;
 
-pub const ITERATIONS: usize = 1000;
+    type TestEncryptionScheme = ECIESPoseidonEncryption<EdwardsParameters>;
 
-fn generate_input<G: Group + ProjectiveCurve, R: Rng>(input_size: usize, rng: &mut R) -> Vec<G> {
-    (0..input_size).map(|_| G::rand(rng)).collect()
-}
+    #[test]
+    fn test_encrypt_and_decrypt() {
+        let rng = &mut ChaChaRng::seed_from_u64(1231275789u64);
 
-#[test]
-fn simple_encryption() {
-    let rng = &mut XorShiftRng::seed_from_u64(1231275789u64);
-
-    let encryption_scheme = TestEncryptionScheme::setup(rng);
-
-    let private_key = encryption_scheme.generate_private_key(rng);
-    let public_key = encryption_scheme.generate_public_key(&private_key).unwrap();
-
-    let randomness = encryption_scheme.generate_randomness(&public_key, rng).unwrap();
-    let message = generate_input(32, rng);
-
-    let ciphertext = encryption_scheme.encrypt(&public_key, &randomness, &message).unwrap();
-    let decrypted_message = encryption_scheme.decrypt(&private_key, &ciphertext).unwrap();
-
-    assert_eq!(message, decrypted_message);
-}
-
-#[test]
-fn encryption_public_key_serialization() {
-    let rng = &mut XorShiftRng::seed_from_u64(1231275789u64);
-
-    let encryption_scheme = TestEncryptionScheme::setup(rng);
-
-    for _ in 0..ITERATIONS {
+        let encryption_scheme = TestEncryptionScheme::setup("simple_encryption");
         let private_key = encryption_scheme.generate_private_key(rng);
-        let public_key = encryption_scheme.generate_public_key(&private_key).unwrap();
+        let public_key = encryption_scheme.generate_public_key(&private_key);
 
-        let public_key_bytes = to_bytes_le![public_key].unwrap();
-        let recovered_public_key =
-            <TestEncryptionScheme as EncryptionScheme>::PublicKey::read_le(&public_key_bytes[..]).unwrap();
+        let randomness = encryption_scheme.generate_randomness(rng);
+        let message = (0..32).map(|_| u8::rand(rng)).collect::<Vec<u8>>();
+        let ciphertext = encryption_scheme.encrypt(&public_key, &randomness, &message).unwrap();
 
-        assert_eq!(public_key, recovered_public_key);
+        let candidate_message = encryption_scheme.decrypt(&private_key, &ciphertext).unwrap();
+        assert_eq!(message, candidate_message);
+    }
+
+    #[test]
+    fn test_encryption_public_key_to_bytes_le() {
+        let rng = &mut ChaChaRng::seed_from_u64(1231275789u64);
+
+        let encryption_scheme = TestEncryptionScheme::setup("encryption_public_key_serialization");
+
+        for _ in 0..ITERATIONS {
+            let private_key = encryption_scheme.generate_private_key(rng);
+            let public_key = encryption_scheme.generate_public_key(&private_key);
+
+            let public_key_bytes = public_key.to_bytes_le().unwrap();
+            let recovered_public_key =
+                <TestEncryptionScheme as EncryptionScheme>::PublicKey::read_le(&public_key_bytes[..]).unwrap();
+            assert_eq!(public_key, recovered_public_key);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_ciphertext_random_manipulation() {
+        let rng = &mut ChaChaRng::seed_from_u64(1231275789u64);
+
+        let encryption_scheme = TestEncryptionScheme::setup("simple_encryption");
+
+        let private_key = encryption_scheme.generate_private_key(rng);
+        let public_key = encryption_scheme.generate_public_key(&private_key);
+
+        let randomness = encryption_scheme.generate_randomness(rng);
+        let message = (0..32).map(|_| u8::rand(rng)).collect::<Vec<u8>>();
+
+        let mut ciphertext = encryption_scheme.encrypt(&public_key, &randomness, &message).unwrap();
+        let idx = rng.gen_range(0..ciphertext.len());
+        ciphertext[idx] = ciphertext[idx].wrapping_add(1u8);
+
+        // This should fail due to a MAC mismatch.
+        encryption_scheme.decrypt(&private_key, &ciphertext).unwrap();
     }
 }

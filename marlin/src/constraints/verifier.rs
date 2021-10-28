@@ -29,34 +29,27 @@ use crate::{
     PolynomialCommitment,
     PoseidonSponge,
     PoseidonSpongeVar,
+    String,
+    Vec,
 };
-use core::marker::PhantomData;
-use snarkvm_algorithms::fft::EvaluationDomain;
+use snarkvm_algorithms::{crypto_hash::PoseidonDefaultParametersField, fft::EvaluationDomain};
 use snarkvm_fields::PrimeField;
 use snarkvm_gadgets::{
     bits::Boolean,
-    nonnative::{params::OptimizationType, NonNativeFieldVar},
-    traits::{
-        algorithms::SNARKVerifierGadget,
-        eq::EqGadget,
-        fields::{FieldGadget, ToConstraintFieldGadget},
-    },
+    nonnative::{params::OptimizationType, NonNativeFieldInputVar, NonNativeFieldVar},
+    traits::{algorithms::SNARKVerifierGadget, eq::EqGadget, fields::FieldGadget},
+    PrepareGadget,
 };
 use snarkvm_polycommit::{PCCheckRandomDataVar, PCCheckVar};
-use snarkvm_r1cs::{ConstraintSynthesizer, ConstraintSystem, SynthesisError, ToConstraintField};
+use snarkvm_r1cs::{ConstraintSystem, SynthesisError, ToConstraintField};
 
 /// The Marlin verification gadget.
 pub struct MarlinVerificationGadget<
     TargetField: PrimeField,
     BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
+    PC: PolynomialCommitment<TargetField, BaseField>,
     PCG: PCCheckVar<TargetField, PC, BaseField>,
->(
-    PhantomData<TargetField>,
-    PhantomData<BaseField>,
-    PhantomData<PC>,
-    PhantomData<PCG>,
-);
+>(PhantomData<(TargetField, BaseField, PC, PCG)>);
 
 /// Fiat Shamir Algebraic Sponge RNG type
 pub type FSA<InnerField, OuterField> = FiatShamirAlgebraicSpongeRng<InnerField, OuterField, PoseidonSponge<OuterField>>;
@@ -65,26 +58,19 @@ pub type FSA<InnerField, OuterField> = FiatShamirAlgebraicSpongeRng<InnerField, 
 pub type FSG<InnerField, OuterField> =
     FiatShamirAlgebraicSpongeRngVar<InnerField, OuterField, PoseidonSponge<OuterField>, PoseidonSpongeVar<OuterField>>;
 
-impl<TargetField, BaseField, PC, PCG, FS, MM, C, V>
-    SNARKVerifierGadget<MarlinSNARK<TargetField, BaseField, PC, FS, MM, C, V>, BaseField>
+impl<TargetField, BaseField, PC, PCG, FS, MM, V> SNARKVerifierGadget<MarlinSNARK<TargetField, BaseField, PC, FS, MM, V>>
     for MarlinVerificationGadget<TargetField, BaseField, PC, PCG>
 where
     TargetField: PrimeField,
-    BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
-    PC::VerifierKey: ToConstraintField<BaseField>,
-    PC::Commitment: ToConstraintField<BaseField>,
+    BaseField: PrimeField + PoseidonDefaultParametersField,
+    PC: PolynomialCommitment<TargetField, BaseField>,
     PCG: PCCheckVar<TargetField, PC, BaseField>,
-    PCG::VerifierKeyVar: ToConstraintFieldGadget<BaseField>,
-    PCG::CommitmentVar: ToConstraintFieldGadget<BaseField>,
     FS: FiatShamirRng<TargetField, BaseField>,
     MM: MarlinMode,
-    C: ConstraintSynthesizer<TargetField>,
-    V: ToConstraintField<TargetField>,
+    V: ToConstraintField<TargetField> + Clone,
 {
-    type Input = NonNativeFieldVar<TargetField, BaseField>;
-    type ProofGadget = ProofVar<TargetField, BaseField, PC, PCG>;
-    type VerificationKeyGadget = PreparedCircuitVerifyingKeyVar<
+    type InputGadget = NonNativeFieldInputVar<TargetField, BaseField>;
+    type PreparedVerificationKeyGadget = PreparedCircuitVerifyingKeyVar<
         TargetField,
         BaseField,
         PC,
@@ -92,18 +78,35 @@ where
         FSA<TargetField, BaseField>,
         FSG<TargetField, BaseField>,
     >;
+    type ProofGadget = ProofVar<TargetField, BaseField, PC, PCG>;
+    type VerificationKeyGadget = CircuitVerifyingKeyVar<TargetField, BaseField, PC, PCG>;
 
-    fn check_verify<CS: ConstraintSystem<BaseField>, I: Iterator<Item = Self::Input>>(
+    fn check_verify<CS: ConstraintSystem<BaseField>>(
         mut cs: CS,
         verification_key: &Self::VerificationKeyGadget,
-        input: I,
+        input: &Self::InputGadget,
         proof: &Self::ProofGadget,
     ) -> Result<(), SynthesisError> {
-        let inputs: Vec<_> = input.collect();
-        let result = Self::prepared_verify(cs.ns(|| "prepared_verify"), verification_key, &inputs, proof).unwrap();
+        let pvk = verification_key.prepare(cs.ns(|| "prepare vk"))?;
+        <Self as SNARKVerifierGadget<MarlinSNARK<TargetField, BaseField, PC, FS, MM, V>>>::prepared_check_verify(
+            cs, &pvk, input, proof,
+        )
+    }
 
+    fn prepared_check_verify<CS: ConstraintSystem<BaseField>>(
+        mut cs: CS,
+        prepared_verification_key: &Self::PreparedVerificationKeyGadget,
+        input: &Self::InputGadget,
+        proof: &Self::ProofGadget,
+    ) -> Result<(), SynthesisError> {
+        let result = Self::prepared_verify(
+            cs.ns(|| "prepared_verify"),
+            prepared_verification_key,
+            &input.val,
+            proof,
+        )
+        .unwrap();
         result.enforce_equal(cs.ns(|| "enforce_verification_correctness"), &Boolean::Constant(true))?;
-
         Ok(())
     }
 }
@@ -111,12 +114,9 @@ where
 impl<TargetField, BaseField, PC, PCG> MarlinVerificationGadget<TargetField, BaseField, PC, PCG>
 where
     TargetField: PrimeField,
-    BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
+    BaseField: PrimeField + PoseidonDefaultParametersField,
+    PC: PolynomialCommitment<TargetField, BaseField>,
     PCG: PCCheckVar<TargetField, PC, BaseField>,
-    PC::Commitment: ToConstraintField<BaseField>,
-    PCG::VerifierKeyVar: ToConstraintFieldGadget<BaseField>,
-    PCG::CommitmentVar: ToConstraintFieldGadget<BaseField>,
 {
     /// The encoding of the protocol name for use as seed.
     pub const PROTOCOL_NAME: &'static [u8] = b"MARLIN-2019";
@@ -259,11 +259,10 @@ where
         public_input: &[NonNativeFieldVar<TargetField, BaseField>],
         proof: &ProofVar<TargetField, BaseField, PC, PCG>,
     ) -> Result<Boolean, MarlinError> {
-        let prepared_verifying_key = PreparedCircuitVerifyingKeyVar::<TargetField, BaseField, PC, PCG, PR, R>::prepare(
-            cs.ns(|| "prepare"),
-            &verifying_key,
-        )?;
-        Self::prepared_verify(
+        eprintln!("before prepared_VK: constraints: {}", cs.num_constraints());
+
+        let prepared_verifying_key = verifying_key.prepare(cs.ns(|| "prepare"))?;
+        Self::prepared_verify::<_, PR, R>(
             cs.ns(|| "prepared_verify"),
             &prepared_verifying_key,
             public_input,
@@ -286,11 +285,11 @@ mod test {
         curves::bls12_377::PairingGadget as Bls12_377PairingGadget,
         traits::{alloc::AllocGadget, eq::EqGadget},
     };
-    use snarkvm_polycommit::marlin_pc::{
+    use snarkvm_polycommit::sonic_pc::{
         commitment::commitment::CommitmentVar,
-        marlin_kzg10::MarlinKZG10Gadget,
         proof::batch_lc_proof::BatchLCProofVar,
-        MarlinKZG10,
+        sonic_kzg10::SonicKZG10Gadget,
+        SonicKZG10,
     };
     use snarkvm_r1cs::TestConstraintSystem;
     use snarkvm_utilities::{test_rng, UniformRand};
@@ -308,8 +307,8 @@ mod test {
 
     use super::*;
 
-    type PC = MarlinKZG10<Bls12_377>;
-    type PCGadget = MarlinKZG10Gadget<Bls12_377, BW6_761, Bls12_377PairingGadget>;
+    type PC = SonicKZG10<Bls12_377>;
+    type PCGadget = SonicKZG10Gadget<Bls12_377, BW6_761, Bls12_377PairingGadget>;
 
     type FS = FiatShamirAlgebraicSpongeRng<Fr, Fq, PoseidonSponge<Fq>>;
     type FSG = FiatShamirAlgebraicSpongeRngVar<Fr, Fq, PoseidonSponge<Fq>, PoseidonSpongeVar<Fq>>;
@@ -320,7 +319,8 @@ mod test {
     fn verifier_test() {
         let rng = &mut test_rng();
 
-        let universal_srs = MarlinInst::universal_setup(10000, 25, 10000, rng).unwrap();
+        let max_degree = crate::ahp::AHPForR1CS::<Fr>::max_degree(10000, 25, 10000).unwrap();
+        let universal_srs = MarlinInst::universal_setup(max_degree, rng).unwrap();
 
         let num_constraints = 10000;
         let num_variables = 25;
@@ -425,10 +425,7 @@ mod test {
 
         let mut evaluation_gadgets = HashMap::<String, NonNativeFieldVar<Fr, Fq>>::new();
 
-        const ALL_POLYNOMIALS: [&str; 10] = [
-            "a_denom",
-            "b_denom",
-            "c_denom",
+        const ALL_POLYNOMIALS: [&str; 7] = [
             "g_1",
             "g_2",
             "t",

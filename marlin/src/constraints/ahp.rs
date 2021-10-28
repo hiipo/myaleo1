@@ -18,7 +18,7 @@ use core::marker::PhantomData;
 
 use hashbrown::{HashMap, HashSet};
 
-use snarkvm_algorithms::fft::EvaluationDomain;
+use snarkvm_algorithms::{crypto_hash::PoseidonDefaultParametersField, fft::EvaluationDomain};
 use snarkvm_fields::PrimeField;
 use snarkvm_gadgets::{
     bits::{Boolean, ToBitsLEGadget},
@@ -28,6 +28,7 @@ use snarkvm_gadgets::{
         alloc::AllocGadget,
         eq::{EqGadget, NEqGadget},
         fields::{FieldGadget, ToConstraintFieldGadget},
+        snark::PrepareGadget,
     },
 };
 use snarkvm_polycommit::{
@@ -37,7 +38,6 @@ use snarkvm_polycommit::{
     LinearCombinationCoeffVar,
     LinearCombinationVar,
     PCCheckVar,
-    PrepareGadget,
     QuerySetVar,
 };
 use snarkvm_r1cs::ConstraintSystem;
@@ -53,6 +53,9 @@ use crate::{
     FiatShamirRng,
     FiatShamirRngVar,
     PolynomialCommitment,
+    String,
+    ToString,
+    Vec,
 };
 
 /// The Marlin verifier round state gadget used to output the state of each round.
@@ -97,13 +100,10 @@ pub struct VerifierThirdMsgVar<TargetField: PrimeField, BaseField: PrimeField> {
 /// The AHP gadget.
 pub struct AHPForR1CS<
     TargetField: PrimeField,
-    BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
+    BaseField: PrimeField + PoseidonDefaultParametersField,
+    PC: PolynomialCommitment<TargetField, BaseField>,
     PCG: PCCheckVar<TargetField, PC, BaseField>,
-> where
-    PCG::VerifierKeyVar: ToConstraintFieldGadget<BaseField>,
-    PCG::CommitmentVar: ToConstraintFieldGadget<BaseField>,
-{
+> {
     field: PhantomData<TargetField>,
     constraint_field: PhantomData<BaseField>,
     polynomial_commitment: PhantomData<PC>,
@@ -112,13 +112,10 @@ pub struct AHPForR1CS<
 
 impl<
     TargetField: PrimeField,
-    BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
+    BaseField: PrimeField + PoseidonDefaultParametersField,
+    PC: PolynomialCommitment<TargetField, BaseField>,
     PCG: PCCheckVar<TargetField, PC, BaseField>,
 > AHPForR1CS<TargetField, BaseField, PC, PCG>
-where
-    PCG::VerifierKeyVar: ToConstraintFieldGadget<BaseField>,
-    PCG::CommitmentVar: ToConstraintFieldGadget<BaseField>,
 {
     /// Returns the first message and next round state.
     #[allow(clippy::type_complexity)]
@@ -226,11 +223,13 @@ where
             });
 
             fs_rng.absorb_native_field_elements(cs.ns(|| "absorb_native_field_elements"), &elems)?;
-            fs_rng.absorb_nonnative_field_elements(
-                cs.ns(|| "absorb_nonnative_field_elements"),
-                &message,
-                OptimizationType::Weight,
-            )?;
+            if !message.is_empty() {
+                fs_rng.absorb_nonnative_field_elements(
+                    cs.ns(|| "absorb_nonnative_field_elements"),
+                    &message,
+                    OptimizationType::Weight,
+                )?;
+            }
         }
 
         // obtain one element from the sponge
@@ -282,11 +281,13 @@ where
                 );
             });
             fs_rng.absorb_native_field_elements(cs.ns(|| "absorb_native_field_elements"), &elems)?;
-            fs_rng.absorb_nonnative_field_elements(
-                cs.ns(|| "absorb_nonnative_field_elements"),
-                &message,
-                OptimizationType::Weight,
-            )?;
+            if !message.is_empty() {
+                fs_rng.absorb_nonnative_field_elements(
+                    cs.ns(|| "absorb_nonnative_field_elements"),
+                    &message,
+                    OptimizationType::Weight,
+                )?;
+            }
         }
 
         // obtain one element from the sponge
@@ -473,57 +474,6 @@ where
 
         let beta_alpha = beta.mul(cs.ns(|| "beta_mul_alpha"), &alpha)?;
 
-        let a_denom_lc_gadget = LinearCombinationVar::<TargetField, BaseField> {
-            label: "a_denom".to_string(),
-            terms: vec![
-                (LinearCombinationCoeffVar::Var(beta_alpha.clone()), LCTerm::One),
-                (
-                    LinearCombinationCoeffVar::Var(alpha.negate(cs.ns(|| "a_alpha"))?),
-                    "a_row".into(),
-                ),
-                (
-                    LinearCombinationCoeffVar::Var(beta.negate(cs.ns(|| "a_beta"))?),
-                    "a_col".into(),
-                ),
-                (LinearCombinationCoeffVar::One, "a_row_col".into()),
-            ],
-        };
-
-        let b_denom_lc_gadget = LinearCombinationVar::<TargetField, BaseField> {
-            label: "b_denom".to_string(),
-            terms: vec![
-                (LinearCombinationCoeffVar::Var(beta_alpha.clone()), LCTerm::One),
-                (
-                    LinearCombinationCoeffVar::Var(alpha.negate(cs.ns(|| "b_alpha"))?),
-                    "b_row".into(),
-                ),
-                (
-                    LinearCombinationCoeffVar::Var(beta.negate(cs.ns(|| "b_beta"))?),
-                    "b_col".into(),
-                ),
-                (LinearCombinationCoeffVar::One, "b_row_col".into()),
-            ],
-        };
-
-        let c_denom_lc_gadget = LinearCombinationVar::<TargetField, BaseField> {
-            label: "c_denom".to_string(),
-            terms: vec![
-                (LinearCombinationCoeffVar::Var(beta_alpha.clone()), LCTerm::One),
-                (
-                    LinearCombinationCoeffVar::Var(alpha.negate(cs.ns(|| "c_alpha"))?),
-                    "c_row".into(),
-                ),
-                (
-                    LinearCombinationCoeffVar::Var(beta.negate(cs.ns(|| "c_beta"))?),
-                    "c_col".into(),
-                ),
-                (LinearCombinationCoeffVar::One, "c_row_col".into()),
-            ],
-        };
-
-        let a_denom_at_gamma = evals.get(&a_denom_lc_gadget.label).unwrap();
-        let b_denom_at_gamma = evals.get(&b_denom_lc_gadget.label).unwrap();
-        let c_denom_at_gamma = evals.get(&c_denom_lc_gadget.label).unwrap();
         let g_2_at_gamma = evals.get(&g_2_lc_gadget.label).unwrap();
 
         let v_h_at_alpha_beta = v_h_at_alpha.mul(cs.ns(|| "v_h_alpha_mul_v_h_beta"), &v_h_at_beta)?;
@@ -562,45 +512,49 @@ where
         let gamma_mul_g_2 = gamma.mul(cs.ns(|| "gamma_mul_g_2"), &g_2_at_gamma)?;
         let t_div_domain_k = t_at_beta.mul(cs.ns(|| "t_div_domain_k"), &inv_domain_k_size_gadget)?;
         let b_expr_at_gamma_last_term = gamma_mul_g_2.add(cs.ns(|| "b_expr_at_gamma_last_term"), &t_div_domain_k)?;
-        let ab_denom_at_gamma = a_denom_at_gamma.mul(cs.ns(|| "ab_denom_at_gamma"), &b_denom_at_gamma)?;
 
         let inner_sumcheck_lc_gadget = LinearCombinationVar::<TargetField, BaseField> {
             label: "inner_sumcheck".to_string(),
             terms: vec![
                 (
                     LinearCombinationCoeffVar::Var(
-                        eta_a
-                            .mul(cs.ns(|| "eta_a_mul_b_denom"), &b_denom_at_gamma)?
-                            .mul(cs.ns(|| "eta_a_mul_b_denom_mul_c_denom"), &c_denom_at_gamma)?
-                            .mul(cs.ns(|| "eta_a_mul_b_denom_mul_c_denom_mul_v_h"), &v_h_at_alpha_beta)?,
+                        eta_a.mul(cs.ns(|| "eta_a_mul_b_denom_mul_c_denom_mul_v_h"), &v_h_at_alpha_beta)?,
                     ),
                     "a_val".into(),
                 ),
                 (
                     LinearCombinationCoeffVar::Var(
-                        eta_b
-                            .mul(cs.ns(|| "eta_b_mul_a_denom"), &a_denom_at_gamma)?
-                            .mul(cs.ns(|| "eta_b_mul_a_denom_mul_c_denom"), &c_denom_at_gamma)?
-                            .mul(cs.ns(|| "eta_b_mul_a_denom_mul_c_denom_mul_v_h"), &v_h_at_alpha_beta)?,
+                        eta_b.mul(cs.ns(|| "eta_b_mul_a_denom_mul_c_denom_mul_v_h"), &v_h_at_alpha_beta)?,
                     ),
                     "b_val".into(),
                 ),
                 (
                     LinearCombinationCoeffVar::Var(
-                        eta_c
-                            .mul(cs.ns(|| "eta_c_mul_ab_denom"), &ab_denom_at_gamma)?
-                            .mul(cs.ns(|| "eta_c_mul_ab_denom_mul_v_h"), &v_h_at_alpha_beta)?,
+                        eta_c.mul(cs.ns(|| "eta_c_mul_ab_denom_mul_v_h"), &v_h_at_alpha_beta)?,
                     ),
                     "c_val".into(),
                 ),
                 (
                     LinearCombinationCoeffVar::Var(
-                        ab_denom_at_gamma
-                            .mul(cs.ns(|| "ab_denom_mul_c_denom"), &c_denom_at_gamma)?
-                            .mul(cs.ns(|| "ab_denom_mul_c_denom_mul_b_last"), &b_expr_at_gamma_last_term)?
-                            .negate(cs.ns(|| "ab_c_b_negate"))?,
+                        beta_alpha
+                            .mul(cs.ns(|| "beta_alpha_mul_b_last"), &b_expr_at_gamma_last_term)?
+                            .negate(cs.ns(|| "beta_alpha_mul_b_last_negate"))?,
                     ),
                     LCTerm::One,
+                ),
+                (
+                    LinearCombinationCoeffVar::Var(
+                        alpha.mul(cs.ns(|| "alpha_mul_b_last"), &b_expr_at_gamma_last_term)?,
+                    ),
+                    "row".into(),
+                ),
+                (
+                    LinearCombinationCoeffVar::Var(beta.mul(cs.ns(|| "beta_mul_b_last"), &b_expr_at_gamma_last_term)?),
+                    "col".into(),
+                ),
+                (
+                    LinearCombinationCoeffVar::Var(b_expr_at_gamma_last_term.negate(cs.ns(|| "b_last_negate"))?),
+                    "row_col".into(),
                 ),
                 (
                     LinearCombinationCoeffVar::Var(v_k_at_gamma.negate(cs.ns(|| "v_k_negate"))?),
@@ -610,9 +564,6 @@ where
         };
 
         linear_combinations.push(g_2_lc_gadget);
-        linear_combinations.push(a_denom_lc_gadget);
-        linear_combinations.push(b_denom_lc_gadget);
-        linear_combinations.push(c_denom_lc_gadget);
         linear_combinations.push(inner_sumcheck_lc_gadget);
 
         let vanishing_poly_h_alpha_lc_gadget = LinearCombinationVar::<TargetField, BaseField> {
@@ -707,18 +658,6 @@ where
             name: "gamma".to_string(),
             value: gamma.clone(),
         }));
-        query_set_gadget.0.insert(("a_denom".to_string(), LabeledPointVar {
-            name: "gamma".to_string(),
-            value: gamma.clone(),
-        }));
-        query_set_gadget.0.insert(("b_denom".to_string(), LabeledPointVar {
-            name: "gamma".to_string(),
-            value: gamma.clone(),
-        }));
-        query_set_gadget.0.insert(("c_denom".to_string(), LabeledPointVar {
-            name: "gamma".to_string(),
-            value: gamma.clone(),
-        }));
         query_set_gadget
             .0
             .insert(("inner_sumcheck".to_string(), LabeledPointVar {
@@ -785,27 +724,6 @@ where
         );
         evaluations_gadget.0.insert(
             LabeledPointVar {
-                name: "a_denom".to_string(),
-                value: gamma.clone(),
-            },
-            (*proof.evaluations.get("a_denom").unwrap()).clone(),
-        );
-        evaluations_gadget.0.insert(
-            LabeledPointVar {
-                name: "b_denom".to_string(),
-                value: gamma.clone(),
-            },
-            (*proof.evaluations.get("b_denom").unwrap()).clone(),
-        );
-        evaluations_gadget.0.insert(
-            LabeledPointVar {
-                name: "c_denom".to_string(),
-                value: gamma.clone(),
-            },
-            (*proof.evaluations.get("c_denom").unwrap()).clone(),
-        );
-        evaluations_gadget.0.insert(
-            LabeledPointVar {
                 name: "inner_sumcheck".to_string(),
                 value: gamma.clone(),
             },
@@ -835,19 +753,13 @@ where
 
         let mut comms = vec![];
 
-        const INDEX_LABELS: [&str; 14] = [
-            "a_row",
-            "a_col",
+        const INDEX_LABELS: [&str; 8] = [
+            "row",
+            "col",
             "a_val",
-            "a_row_col",
-            "b_row",
-            "b_col",
             "b_val",
-            "b_row_col",
-            "c_row",
-            "c_col",
             "c_val",
-            "c_row_col",
+            "row_col",
             "vanishing_poly_h",
             "vanishing_poly_k",
         ];
@@ -864,7 +776,7 @@ where
         // 4 comms for beta from the round 1
         const PROOF_1_LABELS: [&str; 4] = ["w", "z_a", "z_b", "mask_poly"];
         for (i, (comm, label)) in proof.commitments[0].iter().zip(PROOF_1_LABELS.iter()).enumerate() {
-            let prepared_comm = PCG::PreparedCommitmentVar::prepare(cs.ns(|| format!("prepare_1_{}", i)), comm)?;
+            let prepared_comm = comm.prepare(cs.ns(|| format!("prepare_1_{}", i)))?;
             comms.push(PCG::create_prepared_labeled_commitment(
                 label.to_string(),
                 prepared_comm,
@@ -886,7 +798,7 @@ where
             .zip(proof_2_bounds.iter())
             .enumerate()
         {
-            let prepared_comm = PCG::PreparedCommitmentVar::prepare(cs.ns(|| format!("prepare_2_{}", i)), comm)?;
+            let prepared_comm = comm.prepare(cs.ns(|| format!("prepare_2_{}", i)))?;
             comms.push(PCG::create_prepared_labeled_commitment(
                 label.to_string(),
                 prepared_comm,
@@ -907,7 +819,7 @@ where
             .zip(proof_3_bounds.iter())
             .enumerate()
         {
-            let prepared_comm = PCG::PreparedCommitmentVar::prepare(cs.ns(|| format!("prepare_3_{}", i)), comm)?;
+            let prepared_comm = comm.prepare(cs.ns(|| format!("prepare_3_{}", i)))?;
             comms.push(PCG::create_prepared_labeled_commitment(
                 label.to_string(),
                 prepared_comm,
@@ -916,7 +828,7 @@ where
         }
 
         // For commitments; and combined commitments (degree bounds); and combined commitments again.
-        let num_opening_challenges = 7;
+        let num_opening_challenges = 4;
 
         // Combined commitments.
         let num_batching_rands = 2;
@@ -942,14 +854,10 @@ mod test {
     use snarkvm_fields::{Field, Zero};
     use snarkvm_gadgets::{curves::bls12_377::PairingGadget as Bls12_377PairingGadget, traits::eq::EqGadget};
     use snarkvm_polycommit::{
-        marlin_pc::{
-            commitment::{
-                commitment::CommitmentVar,
-                labeled_commitment::LabeledCommitmentVar,
-                prepared_commitment::PreparedCommitmentVar,
-            },
-            marlin_kzg10::MarlinKZG10Gadget,
-            MarlinKZG10,
+        sonic_pc::{
+            commitment::{commitment::CommitmentVar, labeled_commitment::LabeledCommitmentVar},
+            sonic_kzg10::SonicKZG10Gadget,
+            SonicKZG10,
         },
         Evaluations,
         LabeledCommitment,
@@ -966,7 +874,6 @@ mod test {
             MarlinMode,
             MarlinRecursiveMode,
             MarlinSNARK,
-            PreparedCircuitVerifyingKey,
             Proof,
         },
         FiatShamirAlgebraicSpongeRng,
@@ -976,11 +883,13 @@ mod test {
     };
 
     use super::*;
+    use crate::constraints::verifier_key::CircuitVerifyingKeyVar;
+    use snarkvm_algorithms::Prepare;
 
-    type MultiPC = MarlinKZG10<Bls12_377>;
+    type MultiPC = SonicKZG10<Bls12_377>;
     type MarlinInst = MarlinSNARK<Fr, Fq, MultiPC, FS, MarlinRecursiveMode>;
 
-    type MultiPCVar = MarlinKZG10Gadget<Bls12_377, BW6_761, Bls12_377PairingGadget>;
+    type MultiPCVar = SonicKZG10Gadget<Bls12_377, BW6_761, Bls12_377PairingGadget>;
 
     type FS = FiatShamirAlgebraicSpongeRng<Fr, Fq, PoseidonSponge<Fq>>;
     type FSG = FiatShamirAlgebraicSpongeRngVar<Fr, Fq, PoseidonSponge<Fq>, PoseidonSpongeVar<Fq>>;
@@ -1027,14 +936,15 @@ mod test {
         num_variables: usize,
         num_constraints: usize,
     ) -> (
-        CircuitProvingKey<Fr, MultiPC>,
-        CircuitVerifyingKey<Fr, MultiPC>,
-        Proof<Fr, MultiPC>,
+        CircuitProvingKey<Fr, Fq, MultiPC>,
+        CircuitVerifyingKey<Fr, Fq, MultiPC>,
+        Proof<Fr, Fq, MultiPC>,
         Vec<Fr>,
     ) {
         let rng = &mut test_rng();
 
-        let universal_srs = MarlinInst::universal_setup(100, 25, 100, rng).unwrap();
+        let max_degree = crate::ahp::AHPForR1CS::<Fr>::max_degree(100, 25, 100).unwrap();
+        let universal_srs = MarlinInst::universal_setup(max_degree, rng).unwrap();
 
         // Construct circuit keys.
 
@@ -1074,7 +984,7 @@ mod test {
         let (circuit_pk, circuit_vk, proof, public_input) =
             construct_circuit_parameters(num_variables, num_constraints);
 
-        let prepared_circuit_vk = PreparedCircuitVerifyingKey::prepare(&circuit_vk);
+        let prepared_circuit_vk = circuit_vk.prepare();
 
         // Attempt verification.
 
@@ -1206,7 +1116,7 @@ mod test {
         let (circuit_pk, circuit_vk, proof, public_input) =
             construct_circuit_parameters(num_variables, num_constraints);
 
-        let prepared_circuit_vk = PreparedCircuitVerifyingKey::prepare(&circuit_vk);
+        let prepared_circuit_vk = circuit_vk.prepare();
 
         // Attempt verification.
 
@@ -1373,7 +1283,7 @@ mod test {
         let (circuit_pk, circuit_vk, proof, public_input) =
             construct_circuit_parameters(num_variables, num_constraints);
 
-        let prepared_circuit_vk = PreparedCircuitVerifyingKey::prepare(&circuit_vk);
+        let prepared_circuit_vk = circuit_vk.prepare();
 
         // Attempt verification.
 
@@ -1593,8 +1503,6 @@ mod test {
         let (circuit_pk, circuit_vk, proof, public_input) =
             construct_circuit_parameters(num_variables, num_constraints);
 
-        let prepared_circuit_vk = PreparedCircuitVerifyingKey::prepare(&circuit_vk);
-
         // Attempt verification.
 
         let public_input = {
@@ -1657,12 +1565,23 @@ mod test {
         let (_first_round_message, first_round_state) =
             AHPForR1CSNative::verifier_first_round(circuit_pk.circuit.index_info.clone(), fs_rng).unwrap();
 
+        let (domain_h_size, domain_k_size) = {
+            let domain_h = EvaluationDomain::<Fr>::new(circuit_vk.circuit_info.num_constraints)
+                .ok_or(SynthesisError::PolynomialDegreeTooLarge)
+                .unwrap();
+            let domain_k = EvaluationDomain::<Fr>::new(circuit_vk.circuit_info.num_non_zero)
+                .ok_or(SynthesisError::PolynomialDegreeTooLarge)
+                .unwrap();
+
+            (domain_h.size(), domain_k.size())
+        };
+
         // Execute the verifier first round gadget.
         let (_first_round_message_gadget, first_round_state_gadget) =
             AHPForR1CS::<_, _, _, MultiPCVar>::verifier_first_round(
                 cs.ns(|| "verifier_first_round"),
-                prepared_circuit_vk.domain_h_size,
-                prepared_circuit_vk.domain_k_size,
+                domain_h_size as u64,
+                domain_k_size as u64,
                 fs_rng_gadget,
                 &comm_gadgets,
                 &message_gadgets,
@@ -1821,11 +1740,9 @@ mod test {
             formatted_public_input.push(elem);
         }
 
-        let prepared_vk_gadget = PreparedCircuitVerifyingKeyVar::<_, _, _, MultiPCVar, FS, FSG>::alloc(
-            cs.ns(|| "alloc_prepared_vk"),
-            || Ok(prepared_circuit_vk),
-        )
-        .unwrap();
+        let vk_gadget =
+            CircuitVerifyingKeyVar::<_, _, _, MultiPCVar>::alloc(cs.ns(|| "alloc_prepared_vk"), || Ok(circuit_vk))
+                .unwrap();
 
         let proof_gadget =
             ProofVar::<_, _, _, MultiPCVar>::alloc(cs.ns(|| "proof_gadget"), || Ok(proof.clone())).unwrap();
@@ -1835,7 +1752,7 @@ mod test {
             &formatted_public_input,
             &proof_gadget.evaluations,
             third_round_state_gadget.clone(),
-            &prepared_vk_gadget.domain_k_size_gadget,
+            &vk_gadget.domain_k_size_gadget,
         )
         .unwrap();
 
@@ -1893,8 +1810,6 @@ mod test {
 
         let (circuit_pk, circuit_vk, proof, public_input) =
             construct_circuit_parameters(num_variables, num_constraints);
-
-        let prepared_circuit_vk = PreparedCircuitVerifyingKey::prepare(&circuit_vk);
 
         // Attempt verification.
 
@@ -1958,12 +1873,23 @@ mod test {
         let (_first_round_message, first_round_state) =
             AHPForR1CSNative::verifier_first_round(circuit_pk.circuit.index_info.clone(), fs_rng).unwrap();
 
+        let (domain_h_size, domain_k_size) = {
+            let domain_h = EvaluationDomain::<Fr>::new(circuit_vk.circuit_info.num_constraints)
+                .ok_or(SynthesisError::PolynomialDegreeTooLarge)
+                .unwrap();
+            let domain_k = EvaluationDomain::<Fr>::new(circuit_vk.circuit_info.num_non_zero)
+                .ok_or(SynthesisError::PolynomialDegreeTooLarge)
+                .unwrap();
+
+            (domain_h.size(), domain_k.size())
+        };
+
         // Execute the verifier first round gadget.
         let (_first_round_message_gadget, first_round_state_gadget) =
             AHPForR1CS::<_, _, _, MultiPCVar>::verifier_first_round(
                 cs.ns(|| "verifier_first_round"),
-                prepared_circuit_vk.domain_h_size,
-                prepared_circuit_vk.domain_k_size,
+                domain_h_size as u64,
+                domain_k_size as u64,
                 fs_rng_gadget,
                 &comm_gadgets,
                 &message_gadgets,
@@ -2099,11 +2025,12 @@ mod test {
             evaluations.insert(q, *eval);
         }
 
-        let prepared_vk_gadget = PreparedCircuitVerifyingKeyVar::<_, _, _, MultiPCVar, FS, FSG>::alloc(
-            cs.ns(|| "alloc_prepared_vk"),
-            || Ok(prepared_circuit_vk),
-        )
-        .unwrap();
+        let vk_gadget =
+            CircuitVerifyingKeyVar::<_, _, _, MultiPCVar>::alloc(cs.ns(|| "alloc_vk"), || Ok(circuit_vk.clone()))
+                .unwrap();
+
+        let prepared_vk_gadget: PreparedCircuitVerifyingKeyVar<_, _, _, _, FS, FSG> =
+            vk_gadget.prepare(cs.ns(|| "prepare_vk")).unwrap();
 
         let proof_gadget =
             ProofVar::<_, _, _, MultiPCVar>::alloc(cs.ns(|| "proof_gadget"), || Ok(proof.clone())).unwrap();
@@ -2149,7 +2076,7 @@ mod test {
             )
             .unwrap();
 
-        assert_eq!(num_opening_challenges, 7);
+        assert_eq!(num_opening_challenges, 4);
         assert_eq!(num_batching_rands, 2);
 
         let (query_set_native, _verifier_state_native) =
@@ -2188,11 +2115,10 @@ mod test {
             )
             .unwrap();
 
-            let expected_prepared_commitment = PreparedCommitmentVar::prepare(
-                cs.ns(|| format!("prepare_comm_{}", i)),
-                &expected_commitment.commitment,
-            )
-            .unwrap();
+            let expected_prepared_commitment = expected_commitment
+                .commitment
+                .prepare(cs.ns(|| format!("prepare_comm_{}", i)))
+                .unwrap();
 
             expected_prepared_commitment
                 .prepared_comm
@@ -2201,23 +2127,6 @@ mod test {
                     &commitment_gadget.prepared_commitment.prepared_comm,
                 )
                 .unwrap();
-
-            assert_eq!(
-                expected_prepared_commitment.shifted_comm.is_some(),
-                commitment_gadget.prepared_commitment.shifted_comm.is_some()
-            );
-
-            if let (Some(expected_shifted_comm), Some(shifted_comm)) = (
-                expected_prepared_commitment.shifted_comm,
-                commitment_gadget.prepared_commitment.shifted_comm,
-            ) {
-                expected_shifted_comm
-                    .enforce_equal(
-                        cs.ns(|| format!("enforce_eq_commitment_shifted_comm{}", i)),
-                        &shifted_comm,
-                    )
-                    .unwrap();
-            }
 
             // Check degree bound.
 

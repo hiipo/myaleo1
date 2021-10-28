@@ -42,6 +42,26 @@ impl<T: ConditionalEqGadget<F>, F: Field> ConditionalEqGadget<F> for [T] {
         other: &Self,
         condition: &Boolean,
     ) -> Result<(), SynthesisError> {
+        assert_eq!(self.len(), other.len());
+        for (i, (a, b)) in self.iter().zip(other.iter()).enumerate() {
+            let mut cs = cs.ns(|| format!("Iteration {}", i));
+            a.conditional_enforce_equal(&mut cs, b, condition)?;
+        }
+        Ok(())
+    }
+
+    fn cost() -> usize {
+        unimplemented!()
+    }
+}
+impl<T: ConditionalEqGadget<F>, F: Field> ConditionalEqGadget<F> for Vec<T> {
+    fn conditional_enforce_equal<CS: ConstraintSystem<F>>(
+        &self,
+        mut cs: CS,
+        other: &Self,
+        condition: &Boolean,
+    ) -> Result<(), SynthesisError> {
+        assert_eq!(self.len(), other.len());
         for (i, (a, b)) in self.iter().zip(other.iter()).enumerate() {
             let mut cs = cs.ns(|| format!("Iteration {}", i));
             a.conditional_enforce_equal(&mut cs, b, condition)?;
@@ -74,6 +94,18 @@ where
 }
 
 impl<T: EqGadget<F>, F: Field> EqGadget<F> for [T] {
+    fn is_eq<CS: ConstraintSystem<F>>(&self, mut cs: CS, other: &Self) -> Result<Boolean, SynthesisError> {
+        assert_eq!(self.len(), other.len());
+        assert!(!self.is_empty());
+        let mut results = Vec::with_capacity(self.len());
+        for (i, (a, b)) in self.iter().zip(other).enumerate() {
+            results.push(a.is_eq(cs.ns(|| format!("is_eq_{}", i)), b)?);
+        }
+        Boolean::kary_and(cs.ns(|| "is_eq_kary_and"), &results)
+    }
+}
+
+impl<T: EqGadget<F>, F: Field> EqGadget<F> for Vec<T> {
     fn is_eq<CS: ConstraintSystem<F>>(&self, mut cs: CS, other: &Self) -> Result<Boolean, SynthesisError> {
         assert_eq!(self.len(), other.len());
         assert!(!self.is_empty());

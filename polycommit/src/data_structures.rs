@@ -34,6 +34,9 @@ pub type PolynomialLabel = String;
 pub trait PCUniversalParams: CanonicalSerialize + CanonicalDeserialize + Clone + Debug + ToBytes + FromBytes {
     /// Outputs the maximum degree supported by the committer key.
     fn max_degree(&self) -> usize;
+
+    /// Supported degree bounds
+    fn supported_degree_bounds(&self) -> &[usize];
 }
 
 /// Defines the minimal interface of committer keys for any polynomial
@@ -49,20 +52,13 @@ pub trait PCCommitterKey: CanonicalSerialize + CanonicalDeserialize + Clone + De
 
 /// Defines the minimal interface of verifier keys for any polynomial
 /// commitment scheme.
-pub trait PCVerifierKey: CanonicalSerialize + CanonicalDeserialize + Clone + Debug {
+pub trait PCVerifierKey: CanonicalSerialize + CanonicalDeserialize + Clone + Debug + ToBytes + FromBytes {
     /// Outputs the maximum degree supported by the universal parameters
     /// `Self` was derived from.
     fn max_degree(&self) -> usize;
 
     /// Outputs the maximum degree supported by the verifier key.
     fn supported_degree(&self) -> usize;
-}
-
-/// Defines the minimal interface of prepared verifier keys for any polynomial
-/// commitment scheme.
-pub trait PCPreparedVerifierKey<Unprepared: PCVerifierKey> {
-    /// prepare
-    fn prepare(vk: &Unprepared) -> Self;
 }
 
 /// Defines the minimal interface of commitments for any polynomial
@@ -76,13 +72,6 @@ pub trait PCCommitment: CanonicalDeserialize + CanonicalSerialize + Clone + Debu
 
     /// Does this commitment's affine belong to the correct subgroup?
     fn is_in_correct_subgroup_assuming_on_curve(&self) -> bool;
-}
-
-/// Defines the minimal interface of prepared commitments for any polynomial
-/// commitment scheme.
-pub trait PCPreparedCommitment<Unprepared: PCCommitment>: Clone {
-    /// Prepare
-    fn prepare(commitment: &Unprepared) -> Self;
 }
 
 /// Defines the minimal interface of commitment randomness for any polynomial
@@ -169,7 +158,7 @@ impl<F: Field> LabeledPolynomial<F> {
 }
 
 /// A commitment along with information about its degree bound (if any).
-#[derive(Clone, CanonicalSerialize)]
+#[derive(Clone, Debug, CanonicalSerialize)]
 pub struct LabeledCommitment<C: PCCommitment> {
     label: PolynomialLabel,
     commitment: C,

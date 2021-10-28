@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::ahp::AHPForR1CS;
+use crate::{ahp::AHPForR1CS, BTreeSet, Matrix, Vec};
 use snarkvm_fields::PrimeField;
 use snarkvm_utilities::{errors::SerializationError, serialize::*, ToBytes};
 
@@ -32,11 +32,28 @@ pub struct CircuitInfo<F> {
     pub num_variables: usize,
     /// The number of constraints.
     pub num_constraints: usize,
-    /// The maximum number of non-zero entries in any constraint matrix.
+    /// The total number of non-zero entries in the sum of all constraint matrices.
     pub num_non_zero: usize,
 
     #[doc(hidden)]
     pub f: PhantomData<F>,
+}
+
+pub(crate) fn sum_matrices<F: PrimeField>(a: &Matrix<F>, b: &Matrix<F>, c: &Matrix<F>) -> Vec<Vec<usize>> {
+    a.iter()
+        .zip(b)
+        .zip(c)
+        .map(|((row_a, row_b), row_c)| {
+            row_a
+                .iter()
+                .map(|(_, i)| *i)
+                .chain(row_b.iter().map(|(_, i)| *i))
+                .chain(row_c.iter().map(|(_, i)| *i))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        })
+        .collect()
 }
 
 impl<F: PrimeField> CircuitInfo<F> {
@@ -47,7 +64,7 @@ impl<F: PrimeField> CircuitInfo<F> {
 }
 
 impl<F: PrimeField> ToBytes for CircuitInfo<F> {
-    fn write_le<W: Write>(&self, mut w: W) -> Result<(), std::io::Error> {
+    fn write_le<W: Write>(&self, mut w: W) -> Result<(), crate::io::Error> {
         (self.num_variables as u64).write_le(&mut w)?;
         (self.num_constraints as u64).write_le(&mut w)?;
         (self.num_non_zero as u64).write_le(&mut w)

@@ -14,24 +14,17 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{
-    impl_bytes,
-    PCCommitment,
-    PCCommitterKey,
-    PCPreparedCommitment,
-    PCPreparedVerifierKey,
-    PCRandomness,
-    PCVerifierKey,
-    Vec,
-};
+use crate::{impl_bytes, PCCommitment, PCCommitterKey, PCRandomness, PCVerifierKey, Vec};
 use snarkvm_curves::{traits::PairingEngine, Group};
 use snarkvm_fields::{ConstraintFieldError, PrimeField, ToConstraintField};
-use snarkvm_utilities::{error, errors::SerializationError, serialize::*, FromBytes, ToBytes};
+use snarkvm_utilities::{error, errors::SerializationError, serialize::*, FromBytes, ToBytes, ToMinimalBits};
 
 use core::ops::{Add, AddAssign};
 use rand_core::RngCore;
 
 use crate::kzg10;
+use snarkvm_algorithms::Prepare;
+
 /// `UniversalParams` are the universal parameters for the KZG10 scheme.
 pub type UniversalParams<E> = kzg10::UniversalParams<E>;
 
@@ -139,11 +132,7 @@ impl<E: PairingEngine> PCVerifierKey for VerifierKey<E> {
     }
 }
 
-impl<E: PairingEngine> ToConstraintField<E::Fq> for VerifierKey<E>
-where
-    E::G1Affine: ToConstraintField<E::Fq>,
-    E::G2Affine: ToConstraintField<E::Fq>,
-{
+impl<E: PairingEngine> ToConstraintField<E::Fq> for VerifierKey<E> {
     fn to_field_elements(&self) -> Result<Vec<E::Fq>, ConstraintFieldError> {
         let mut res = Vec::new();
         res.extend_from_slice(&self.vk.to_field_elements()?);
@@ -170,7 +159,7 @@ pub struct PreparedVerifierKey<E: PairingEngine> {
     /// Information required to enforce degree bounds. Each pair
     /// is of the form `(degree_bound, shifting_advice)`.
     /// This is `None` if `self` does not support enforcing any degree bounds.
-    pub prepared_degree_bounds_and_shift_powers: Option<Vec<(usize, Vec<E::G1Affine>)>>,
+    pub degree_bounds_and_prepared_shift_powers: Option<Vec<(usize, Vec<E::G1Affine>)>>,
     /// The maximum degree supported by the `UniversalParams` `self` was derived
     /// from.
     pub max_degree: usize,
@@ -179,18 +168,27 @@ pub struct PreparedVerifierKey<E: PairingEngine> {
     pub supported_degree: usize,
 }
 
-impl<E: PairingEngine> PCPreparedVerifierKey<VerifierKey<E>> for PreparedVerifierKey<E> {
+impl<E: PairingEngine> PreparedVerifierKey<E> {
+    /// Find the appropriate shift for the degree bound.
+    pub fn get_prepared_shift_power(&self, bound: usize) -> Option<Vec<E::G1Affine>> {
+        self.degree_bounds_and_prepared_shift_powers
+            .as_ref()
+            .and_then(|v| v.binary_search_by(|(d, _)| d.cmp(&bound)).ok().map(|i| v[i].1.clone()))
+    }
+}
+
+impl<E: PairingEngine> Prepare<PreparedVerifierKey<E>> for VerifierKey<E> {
     /// prepare `PreparedVerifierKey` from `VerifierKey`
-    fn prepare(vk: &VerifierKey<E>) -> Self {
-        let prepared_vk = kzg10::PreparedVerifierKey::<E>::prepare(&vk.vk);
+    fn prepare(&self) -> PreparedVerifierKey<E> {
+        let prepared_vk = kzg10::PreparedVerifierKey::<E>::prepare(&self.vk);
 
         let supported_bits = E::Fr::size_in_bits();
 
         let prepared_degree_bounds_and_shift_powers: Option<Vec<(usize, Vec<E::G1Affine>)>> =
-            if vk.degree_bounds_and_shift_powers.is_some() {
+            if self.degree_bounds_and_shift_powers.is_some() {
                 let mut res = Vec::<(usize, Vec<E::G1Affine>)>::new();
 
-                let degree_bounds_and_shift_powers = vk.degree_bounds_and_shift_powers.as_ref().unwrap();
+                let degree_bounds_and_shift_powers = self.degree_bounds_and_shift_powers.as_ref().unwrap();
 
                 for (d, shift_power) in degree_bounds_and_shift_powers {
                     let mut prepared_shift_power = Vec::<E::G1Affine>::new();
@@ -209,11 +207,11 @@ impl<E: PairingEngine> PCPreparedVerifierKey<VerifierKey<E>> for PreparedVerifie
                 None
             };
 
-        Self {
+        PreparedVerifierKey::<E> {
             prepared_vk,
-            prepared_degree_bounds_and_shift_powers,
-            max_degree: vk.max_degree,
-            supported_degree: vk.supported_degree,
+            degree_bounds_and_prepared_shift_powers: prepared_degree_bounds_and_shift_powers,
+            max_degree: self.max_degree,
+            supported_degree: self.supported_degree,
         }
     }
 }
@@ -235,6 +233,18 @@ pub struct Commitment<E: PairingEngine> {
     pub(crate) shifted_comm: Option<kzg10::Commitment<E>>,
 }
 impl_bytes!(Commitment);
+
+impl<E: PairingEngine> ToMinimalBits for Commitment<E> {
+    fn to_minimal_bits(&self) -> Vec<bool> {
+        let comm_bits = self.comm.to_minimal_bits();
+
+        if let Some(shifted_comm) = &self.shifted_comm {
+            [comm_bits, shifted_comm.to_minimal_bits()].concat()
+        } else {
+            comm_bits
+        }
+    }
+}
 
 impl<E: PairingEngine> PCCommitment for Commitment<E> {
     #[inline]
@@ -259,10 +269,7 @@ impl<E: PairingEngine> PCCommitment for Commitment<E> {
     }
 }
 
-impl<E: PairingEngine> ToConstraintField<E::Fq> for Commitment<E>
-where
-    E::G1Affine: ToConstraintField<E::Fq>,
-{
+impl<E: PairingEngine> ToConstraintField<E::Fq> for Commitment<E> {
     fn to_field_elements(&self) -> Result<Vec<E::Fq>, ConstraintFieldError> {
         let mut res = Vec::new();
         res.extend_from_slice(&self.comm.to_field_elements()?);
@@ -289,14 +296,14 @@ pub struct PreparedCommitment<E: PairingEngine> {
     pub(crate) shifted_comm: Option<kzg10::Commitment<E>>,
 }
 
-impl<E: PairingEngine> PCPreparedCommitment<Commitment<E>> for PreparedCommitment<E> {
+impl<E: PairingEngine> Prepare<PreparedCommitment<E>> for Commitment<E> {
     /// Prepare commitment to a polynomial that optionally enforces a degree bound.
-    fn prepare(commitment: &Commitment<E>) -> Self {
-        let prepared_commitment = kzg10::PreparedCommitment::<E>::prepare(&commitment.comm);
+    fn prepare(&self) -> PreparedCommitment<E> {
+        let prepared_commitment = kzg10::PreparedCommitment::<E>::prepare(&self.comm);
 
-        let shifted_commitment = commitment.shifted_comm.clone();
+        let shifted_commitment = self.shifted_comm.clone();
 
-        Self {
+        PreparedCommitment::<E> {
             prepared_comm: prepared_commitment,
             shifted_comm: shifted_commitment,
         }

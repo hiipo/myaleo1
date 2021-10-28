@@ -14,186 +14,86 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use std::{
-    fmt::{Debug, Formatter},
-    marker::PhantomData,
-    sync::atomic::AtomicBool,
-};
-
-use rand::{CryptoRng, Rng, RngCore};
-
-use snarkvm_algorithms::{SNARKError, SNARK};
-use snarkvm_fields::{PrimeField, ToConstraintField};
-use snarkvm_gadgets::{
-    bits::Boolean,
-    nonnative::NonNativeFieldInputVar,
-    traits::{algorithms::SNARKGadget, fields::ToConstraintFieldGadget},
-};
-use snarkvm_polycommit::{PCCheckVar, PolynomialCommitment};
-use snarkvm_r1cs::{ConstraintSynthesizer, ConstraintSystem, LinearCombination, SynthesisError, Variable};
+use rand::{CryptoRng, Rng};
 
 use crate::{
-    constraints::{
-        error::MarlinConstraintsError,
-        proof::ProofVar,
-        verifier::MarlinVerificationGadget,
-        verifier_key::{CircuitVerifyingKeyVar, PreparedCircuitVerifyingKeyVar},
-        UniversalSRS,
-    },
+    constraints::UniversalSRS,
     fiat_shamir::FiatShamirRng,
     marlin::{
         CircuitProvingKey,
         CircuitVerifyingKey,
-        MarlinError,
         MarlinMode,
         MarlinSNARK as MarlinCore,
         PreparedCircuitVerifyingKey,
         Proof,
     },
-    FiatShamirRngVar,
+    PhantomData,
+    PolynomialCommitment,
 };
-
-/// Marlin bound.
-#[derive(Clone, PartialEq, PartialOrd)]
-pub struct MarlinBound {
-    /// Maximum degree for universal setup.
-    pub max_degree: usize,
-}
-
-impl Default for MarlinBound {
-    fn default() -> Self {
-        Self { max_degree: 200000 }
-    }
-}
-
-impl Debug for MarlinBound {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.max_degree)
-    }
-}
+use core::sync::atomic::AtomicBool;
+use snarkvm_algorithms::{crypto_hash::PoseidonDefaultParametersField, SNARKError, SNARK, SRS};
+use snarkvm_fields::{PrimeField, ToConstraintField};
+use snarkvm_r1cs::ConstraintSynthesizer;
 
 /// The Marlin proof system.
+#[derive(Clone, Debug)]
 pub struct MarlinSNARK<
     F: PrimeField,
     FSF: PrimeField,
-    PC: PolynomialCommitment<F>,
+    PC: PolynomialCommitment<F, FSF>,
     FS: FiatShamirRng<F, FSF>,
     MC: MarlinMode,
-    C: ConstraintSynthesizer<F>,
-    V: ToConstraintField<F>,
+    V: ToConstraintField<F> + Clone,
 > {
-    f_phantom: PhantomData<F>,
-    fsf_phantom: PhantomData<FSF>,
-    pc_phantom: PhantomData<PC>,
-    fs_phantom: PhantomData<FS>,
-    mc_phantom: PhantomData<MC>,
-    c_phantom: PhantomData<C>,
-    v_phantom: PhantomData<V>,
+    _phantom: PhantomData<(F, FSF, PC, FS, MC, V)>,
 }
 
-impl<TargetField, BaseField, PC, FS, MM, C, V> MarlinSNARK<TargetField, BaseField, PC, FS, MM, C, V>
+impl<TargetField, BaseField, PC, FS, MM, V> SNARK for MarlinSNARK<TargetField, BaseField, PC, FS, MM, V>
 where
     TargetField: PrimeField,
-    BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
+    BaseField: PrimeField + PoseidonDefaultParametersField,
+    PC: PolynomialCommitment<TargetField, BaseField>,
     FS: FiatShamirRng<TargetField, BaseField>,
     MM: MarlinMode,
-    PC::VerifierKey: ToConstraintField<BaseField>,
-    PC::Commitment: ToConstraintField<BaseField>,
-    C: ConstraintSynthesizer<TargetField>,
-    V: ToConstraintField<TargetField>,
+    V: ToConstraintField<TargetField> + Clone,
 {
-    /// Generates the universal proving and verifying keys for the argument system.
-    pub fn universal_setup<R: Rng>(
-        bound: &MarlinBound,
-        rng: &mut R,
-    ) -> Result<(MarlinBound, UniversalSRS<TargetField, PC>), Box<MarlinConstraintsError>> {
-        let MarlinBound { max_degree } = bound;
-
-        match MarlinCore::<TargetField, BaseField, PC, FS, MM>::universal_setup(1, 1, (max_degree + 5) / 3, rng) {
-            Ok(res) => Ok((bound.clone(), res)),
-            Err(e) => Err(Box::new(MarlinConstraintsError::from(e))),
-        }
-    }
-
-    /// Generates the circuit proving and verifying keys.
-    /// This is a deterministic algorithm that anyone can rerun.
-    #[allow(clippy::type_complexity)]
-    pub fn index<R: RngCore>(
-        crs: &(MarlinBound, UniversalSRS<TargetField, PC>),
-        circuit: C,
-        _rng: &mut R,
-    ) -> Result<(<Self as SNARK>::ProvingKey, <Self as SNARK>::VerifyingKey), Box<MarlinConstraintsError>> {
-        let index_res = MarlinCore::<TargetField, BaseField, PC, FS, MM>::circuit_setup(&crs.1, &circuit);
-        match index_res {
-            Ok(res) => Ok(res),
-            Err(e) => Err(Box::new(MarlinError::from(e).into())),
-        }
-    }
-
-    /// Generate the index-specific (i.e., circuit-specific) prover and verifier
-    /// keys. This is a trusted setup.
-    pub fn circuit_specific_setup<R: RngCore + CryptoRng>(
-        circuit: C,
-        rng: &mut R,
-    ) -> Result<(CircuitProvingKey<TargetField, PC>, CircuitVerifyingKey<TargetField, PC>), Box<MarlinConstraintsError>>
-    {
-        Ok(MarlinCore::<TargetField, BaseField, PC, FS, MM>::circuit_specific_setup(&circuit, rng).unwrap())
-    }
-
-    /// Prepare the verifying key.
-    pub fn process_vk(
-        vk: &CircuitVerifyingKey<TargetField, PC>,
-    ) -> Result<PreparedCircuitVerifyingKey<TargetField, PC>, Box<MarlinConstraintsError>> {
-        Ok(PreparedCircuitVerifyingKey::prepare(vk))
-    }
-
-    /// Verify the proof with the prepared verifying key.
-    pub fn verify_with_processed_vk(
-        pvk: &PreparedCircuitVerifyingKey<TargetField, PC>,
-        x: &[TargetField],
-        proof: &Proof<TargetField, PC>,
-    ) -> Result<bool, Box<MarlinConstraintsError>> {
-        match MarlinCore::<TargetField, BaseField, PC, FS, MM>::prepared_verify(pvk, x, proof) {
-            Ok(res) => Ok(res),
-            Err(e) => Err(Box::new(MarlinError::from(e).into())),
-        }
-    }
-}
-
-impl<TargetField, BaseField, PC, FS, MM, C, V> SNARK for MarlinSNARK<TargetField, BaseField, PC, FS, MM, C, V>
-where
-    TargetField: PrimeField,
-    BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
-    FS: FiatShamirRng<TargetField, BaseField>,
-    MM: MarlinMode,
-    PC::VerifierKey: ToConstraintField<BaseField>,
-    PC::Commitment: ToConstraintField<BaseField>,
-    C: ConstraintSynthesizer<TargetField>,
-    V: ToConstraintField<TargetField>,
-{
-    type AllocatedCircuit = C;
-    type Circuit = (C, UniversalSRS<TargetField, PC>);
-    type PreparedVerifyingKey = PreparedCircuitVerifyingKey<TargetField, PC>;
-    type Proof = Proof<TargetField, PC>;
-    type ProvingKey = CircuitProvingKey<TargetField, PC>;
+    type BaseField = BaseField;
+    type PreparedVerifyingKey = PreparedCircuitVerifyingKey<TargetField, BaseField, PC>;
+    type Proof = Proof<TargetField, BaseField, PC>;
+    type ProvingKey = CircuitProvingKey<TargetField, BaseField, PC>;
+    type ScalarField = TargetField;
+    type UniversalSetupConfig = usize;
+    type UniversalSetupParameters = UniversalSRS<TargetField, BaseField, PC>;
     type VerifierInput = V;
-    type VerifyingKey = CircuitVerifyingKey<TargetField, PC>;
+    type VerifyingKey = CircuitVerifyingKey<TargetField, BaseField, PC>;
 
-    fn setup<R: RngCore>(
-        (circuit, _srs): &Self::Circuit,
-        rng: &mut R, // The Marlin circuit setup is deterministic.
-    ) -> Result<(Self::ProvingKey, Self::PreparedVerifyingKey), SNARKError> {
-        let (circuit_proving_key, circuit_verifier_key) =
-            MarlinCore::<TargetField, BaseField, PC, FS, MM>::circuit_specific_setup(circuit, rng).unwrap();
+    fn universal_setup<R: Rng + CryptoRng>(
+        max_degree: &Self::UniversalSetupConfig,
+        rng: &mut R,
+    ) -> Result<Self::UniversalSetupParameters, SNARKError> {
+        let setup_time = start_timer!(|| "{Marlin}::Setup");
+        let srs = MarlinCore::<TargetField, BaseField, PC, FS, MM>::universal_setup(*max_degree, rng)?;
+        end_timer!(setup_time);
 
-        Ok((circuit_proving_key, circuit_verifier_key.into()))
+        Ok(srs)
     }
 
-    fn prove_with_terminator<R: Rng>(
+    fn setup<C: ConstraintSynthesizer<TargetField>, R: Rng + CryptoRng>(
+        circuit: &C,
+        srs: &mut SRS<R, Self::UniversalSetupParameters>,
+    ) -> Result<(Self::ProvingKey, Self::VerifyingKey), SNARKError> {
+        let (pk, vk) = match srs {
+            SRS::CircuitSpecific(rng) => {
+                MarlinCore::<TargetField, BaseField, PC, FS, MM>::circuit_specific_setup(circuit, rng)?
+            }
+            SRS::Universal(srs) => MarlinCore::<TargetField, BaseField, PC, FS, MM>::circuit_setup(srs, circuit)?,
+        };
+        Ok((pk, vk))
+    }
+
+    fn prove_with_terminator<C: ConstraintSynthesizer<TargetField>, R: Rng + CryptoRng>(
         parameters: &Self::ProvingKey,
-        circuit: &Self::AllocatedCircuit,
+        circuit: &C,
         terminator: &AtomicBool,
         rng: &mut R,
     ) -> Result<Self::Proof, SNARKError> {
@@ -208,13 +108,13 @@ where
         }
     }
 
-    fn verify(
-        verifying_key: &Self::PreparedVerifyingKey,
+    fn verify_prepared(
+        prepared_verifying_key: &Self::PreparedVerifyingKey,
         input: &Self::VerifierInput,
         proof: &Self::Proof,
     ) -> Result<bool, SNARKError> {
         match MarlinCore::<TargetField, BaseField, PC, FS, MM>::prepared_verify(
-            verifying_key,
+            prepared_verifying_key,
             &input.to_field_elements()?,
             proof,
         ) {
@@ -224,154 +124,17 @@ where
     }
 }
 
-/// The Marlin proof system gadget.
-pub struct MarlinSNARKGadget<F, FSF, PC, FS, MM, PCG, FSG>
-where
-    F: PrimeField,
-    FSF: PrimeField,
-    PC: PolynomialCommitment<F>,
-    FS: FiatShamirRng<F, FSF>,
-    MM: MarlinMode,
-    PCG: PCCheckVar<F, PC, FSF>,
-    FSG: FiatShamirRngVar<F, FSF, FS>,
-{
-    f_phantom: PhantomData<F>,
-    fsf_phantom: PhantomData<FSF>,
-    pc_phantom: PhantomData<PC>,
-    fs_phantom: PhantomData<FS>,
-    mm_phantom: PhantomData<MM>,
-    pcg_phantom: PhantomData<PCG>,
-    fsg_phantom: PhantomData<FSG>,
-}
-
-impl<TargetField, BaseField, PC, FS, MM, PCG, FSG, C, V>
-    SNARKGadget<TargetField, BaseField, MarlinSNARK<TargetField, BaseField, PC, FS, MM, C, V>>
-    for MarlinSNARKGadget<TargetField, BaseField, PC, FS, MM, PCG, FSG>
-where
-    TargetField: PrimeField,
-    BaseField: PrimeField,
-    PC: PolynomialCommitment<TargetField>,
-    FS: FiatShamirRng<TargetField, BaseField>,
-    MM: MarlinMode,
-    PCG: PCCheckVar<TargetField, PC, BaseField>,
-    FSG: FiatShamirRngVar<TargetField, BaseField, FS>,
-    PC::VerifierKey: ToConstraintField<BaseField>,
-    PC::Commitment: ToConstraintField<BaseField>,
-    PCG::VerifierKeyVar: ToConstraintFieldGadget<BaseField>,
-    PCG::CommitmentVar: ToConstraintFieldGadget<BaseField>,
-    C: ConstraintSynthesizer<TargetField>,
-    V: ToConstraintField<TargetField>,
-{
-    type InputVar = NonNativeFieldInputVar<TargetField, BaseField>;
-    type PreparedVerifyingKeyVar = PreparedCircuitVerifyingKeyVar<TargetField, BaseField, PC, PCG, FS, FSG>;
-    type ProofVar = ProofVar<TargetField, BaseField, PC, PCG>;
-    type VerifierSize = usize;
-    type VerifyingKeyVar = CircuitVerifyingKeyVar<TargetField, BaseField, PC, PCG>;
-
-    fn verifier_size(
-        circuit_vk: &<MarlinSNARK<TargetField, BaseField, PC, FS, MM, C, V> as SNARK>::VerifyingKey,
-    ) -> Self::VerifierSize {
-        circuit_vk.circuit_info.num_variables
-    }
-
-    fn verify_with_processed_vk<CS: ConstraintSystem<BaseField>>(
-        mut cs: CS,
-        circuit_pvk: &Self::PreparedVerifyingKeyVar,
-        x: &Self::InputVar,
-        proof: &Self::ProofVar,
-    ) -> Result<Boolean, SynthesisError> {
-        Ok(
-            MarlinVerificationGadget::<TargetField, BaseField, PC, PCG>::prepared_verify(
-                cs.ns(|| "prepared_verify"),
-                &circuit_pvk,
-                &x.val,
-                proof,
-            )
-            .unwrap(),
-        )
-    }
-
-    fn verify<CS: ConstraintSystem<BaseField>>(
-        mut cs: CS,
-        circuit_vk: &Self::VerifyingKeyVar,
-        x: &Self::InputVar,
-        proof: &Self::ProofVar,
-    ) -> Result<Boolean, SynthesisError> {
-        Ok(
-            MarlinVerificationGadget::<TargetField, BaseField, PC, PCG>::verify::<_, FS, FSG>(
-                cs.ns(|| "verify"),
-                circuit_vk,
-                &x.val,
-                proof,
-            )
-            .unwrap(),
-        )
-    }
-}
-
-/// Circuit representing the `MarlinBound`
-#[derive(Clone)]
-pub struct MarlinBoundCircuit<F: PrimeField> {
-    /// The Marlin bound.
-    pub bound: MarlinBound,
-    _fsf_phantom: PhantomData<F>,
-}
-
-impl<F: PrimeField> From<MarlinBound> for MarlinBoundCircuit<F> {
-    fn from(bound: MarlinBound) -> Self {
-        Self {
-            bound,
-            _fsf_phantom: PhantomData,
-        }
-    }
-}
-
-impl<F: PrimeField> ConstraintSynthesizer<F> for MarlinBoundCircuit<F> {
-    fn generate_constraints<CS: ConstraintSystem<F>>(&self, cs: &mut CS) -> Result<(), SynthesisError> {
-        let MarlinBound { max_degree } = self.bound;
-
-        let num_variables = max_degree / 3;
-        let num_constraints = max_degree / 3;
-
-        let mut vars: Vec<Variable> = vec![];
-        for i in 0..num_variables - 1 {
-            let var_i = cs.alloc(|| format!("var_i_{}", i), || Ok(F::zero()))?;
-            vars.push(var_i);
-        }
-
-        let mut rng = snarkvm_utilities::test_rng();
-
-        let mut non_zero_remaining = (max_degree + 5) / 3;
-        for i in 0..num_constraints {
-            if non_zero_remaining > 0 {
-                let num_for_this_constraint = std::cmp::min(non_zero_remaining, num_variables - 1);
-
-                let mut lc_a = LinearCombination::zero();
-                let mut lc_b = LinearCombination::zero();
-                let mut lc_c = LinearCombination::zero();
-
-                for var in vars.iter().take(num_for_this_constraint) {
-                    lc_a += (F::rand(&mut rng), *var);
-                    lc_b += (F::rand(&mut rng), *var);
-                    lc_c += (F::rand(&mut rng), *var);
-                }
-
-                cs.enforce(|| format!("enforce_constraint_{}", i), |_| lc_a, |_| lc_b, |_| lc_c);
-
-                non_zero_remaining -= num_for_this_constraint;
-            } else {
-                cs.enforce(|| format!("enforce_constraint_{}", i), |lc| lc, |lc| lc, |lc| lc);
-            }
-        }
-
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 pub mod test {
     use core::ops::MulAssign;
 
+    use super::*;
+    use crate::{
+        constraints::{snark::MarlinSNARK, verifier::MarlinVerificationGadget},
+        fiat_shamir::{FiatShamirAlgebraicSpongeRng, PoseidonSponge},
+        marlin::MarlinRecursiveMode,
+    };
+    use snarkvm_algorithms::SRS;
     use snarkvm_curves::{
         bls12_377::{Bls12_377, Fq, Fr},
         bw6_761::BW6_761,
@@ -379,24 +142,12 @@ pub mod test {
     use snarkvm_fields::Field;
     use snarkvm_gadgets::{
         curves::bls12_377::PairingGadget as Bls12_377PairingGadget,
-        traits::{alloc::AllocGadget, eq::EqGadget},
+        traits::alloc::AllocGadget,
+        SNARKVerifierGadget,
     };
-    use snarkvm_polycommit::marlin_pc::{marlin_kzg10::MarlinKZG10Gadget, MarlinKZG10};
-    use snarkvm_r1cs::TestConstraintSystem;
+    use snarkvm_polycommit::sonic_pc::{sonic_kzg10::SonicKZG10Gadget, SonicKZG10};
+    use snarkvm_r1cs::{ConstraintSystem, SynthesisError, TestConstraintSystem};
     use snarkvm_utilities::{test_rng, UniformRand};
-
-    use crate::{
-        constraints::snark::{MarlinSNARK, MarlinSNARKGadget},
-        fiat_shamir::{
-            FiatShamirAlgebraicSpongeRng,
-            FiatShamirAlgebraicSpongeRngVar,
-            PoseidonSponge,
-            PoseidonSpongeVar,
-        },
-        marlin::MarlinRecursiveMode,
-    };
-
-    use super::*;
 
     const ITERATIONS: usize = 10;
 
@@ -438,14 +189,13 @@ pub mod test {
         }
     }
 
-    type PC = MarlinKZG10<Bls12_377>;
-    type PCGadget = MarlinKZG10Gadget<Bls12_377, BW6_761, Bls12_377PairingGadget>;
+    type PC = SonicKZG10<Bls12_377>;
+    type PCGadget = SonicKZG10Gadget<Bls12_377, BW6_761, Bls12_377PairingGadget>;
 
     type FS = FiatShamirAlgebraicSpongeRng<Fr, Fq, PoseidonSponge<Fq>>;
-    type FSG = FiatShamirAlgebraicSpongeRngVar<Fr, Fq, PoseidonSponge<Fq>, PoseidonSpongeVar<Fq>>;
 
-    type TestSNARK = MarlinSNARK<Fr, Fq, PC, FS, MarlinRecursiveMode, Circuit<Fr>, Vec<Fr>>;
-    type TestSNARKGadget = MarlinSNARKGadget<Fr, Fq, PC, FS, MarlinRecursiveMode, PCGadget, FSG>;
+    type TestSNARK = MarlinSNARK<Fr, Fq, PC, FS, MarlinRecursiveMode, Vec<Fr>>;
+    type TestSNARKGadget = MarlinVerificationGadget<Fr, Fq, PC, PCGadget>;
 
     #[test]
     fn marlin_snark_test() {
@@ -468,7 +218,7 @@ pub mod test {
 
             // Generate the circuit parameters.
 
-            let (pk, vk) = TestSNARK::circuit_specific_setup(circ, &mut rng).unwrap();
+            let (pk, vk) = TestSNARK::setup(&circ, &mut SRS::CircuitSpecific(&mut rng)).unwrap();
 
             // Test native proof and verification.
 
@@ -482,19 +232,19 @@ pub mod test {
             // Initialize constraint system.
             let mut cs = TestConstraintSystem::<Fq>::new();
 
-            let input_gadget = <TestSNARKGadget as SNARKGadget<Fr, Fq, TestSNARK>>::InputVar::alloc_input(
+            let input_gadget = <TestSNARKGadget as SNARKVerifierGadget<TestSNARK>>::InputGadget::alloc_input(
                 cs.ns(|| "alloc_input_gadget"),
                 || Ok(vec![c]),
             )
             .unwrap();
 
-            let proof_gadget =
-                <TestSNARKGadget as SNARKGadget<Fr, Fq, TestSNARK>>::ProofVar::alloc(cs.ns(|| "alloc_proof"), || {
-                    Ok(proof)
-                })
-                .unwrap();
+            let proof_gadget = <TestSNARKGadget as SNARKVerifierGadget<TestSNARK>>::ProofGadget::alloc(
+                cs.ns(|| "alloc_proof"),
+                || Ok(proof),
+            )
+            .unwrap();
 
-            let vk_gadget = <TestSNARKGadget as SNARKGadget<Fr, Fq, TestSNARK>>::VerifyingKeyVar::alloc(
+            let vk_gadget = <TestSNARKGadget as SNARKVerifierGadget<TestSNARK>>::VerificationKeyGadget::alloc(
                 cs.ns(|| "alloc_vk"),
                 || Ok(vk.clone()),
             )
@@ -506,7 +256,7 @@ pub mod test {
                 cs.which_is_unsatisfied().unwrap()
             );
 
-            let verification_result = <TestSNARKGadget as SNARKGadget<Fr, Fq, TestSNARK>>::verify(
+            <TestSNARKGadget as SNARKVerifierGadget<TestSNARK>>::check_verify(
                 cs.ns(|| "marlin_verify"),
                 &vk_gadget,
                 &input_gadget,
@@ -519,10 +269,6 @@ pub mod test {
                 "Constraints not satisfied: {}",
                 cs.which_is_unsatisfied().unwrap()
             );
-
-            verification_result
-                .enforce_equal(cs.ns(|| "enforce_equal_verification"), &Boolean::Constant(true))
-                .unwrap();
 
             assert!(
                 cs.is_satisfied(),
@@ -552,7 +298,7 @@ pub mod test {
 
         // Generate the circuit parameters.
 
-        let (pk, vk) = TestSNARK::circuit_specific_setup(circ, &mut rng).unwrap();
+        let (pk, vk) = TestSNARK::setup(&circ, &mut SRS::CircuitSpecific(&mut rng)).unwrap();
 
         // Test native proof and verification.
 
@@ -566,7 +312,7 @@ pub mod test {
         // Initialize constraint system.
         let mut cs = TestConstraintSystem::<Fq>::new();
 
-        let input_gadget = <TestSNARKGadget as SNARKGadget<Fr, Fq, TestSNARK>>::InputVar::alloc_input(
+        let input_gadget = <TestSNARKGadget as SNARKVerifierGadget<TestSNARK>>::InputGadget::alloc_input(
             cs.ns(|| "alloc_input_gadget"),
             || Ok(vec![c]),
         )
@@ -575,20 +321,22 @@ pub mod test {
         let input_gadget_constraints = cs.num_constraints();
 
         let proof_gadget =
-            <TestSNARKGadget as SNARKGadget<Fr, Fq, TestSNARK>>::ProofVar::alloc(cs.ns(|| "alloc_proof"), || Ok(proof))
-                .unwrap();
-
-        let proof_gadget_constraints = cs.num_constraints() - input_gadget_constraints;
-
-        let vk_gadget =
-            <TestSNARKGadget as SNARKGadget<Fr, Fq, TestSNARK>>::VerifyingKeyVar::alloc(cs.ns(|| "alloc_vk"), || {
-                Ok(vk.clone())
+            <TestSNARKGadget as SNARKVerifierGadget<TestSNARK>>::ProofGadget::alloc(cs.ns(|| "alloc_proof"), || {
+                Ok(proof)
             })
             .unwrap();
 
-        let vk_gadget_constraints = cs.num_constraints() - input_gadget_constraints;
+        let proof_gadget_constraints = cs.num_constraints() - input_gadget_constraints;
 
-        let verification_result = <TestSNARKGadget as SNARKGadget<Fr, Fq, TestSNARK>>::verify(
+        let vk_gadget = <TestSNARKGadget as SNARKVerifierGadget<TestSNARK>>::VerificationKeyGadget::alloc(
+            cs.ns(|| "alloc_vk"),
+            || Ok(vk.clone()),
+        )
+        .unwrap();
+
+        let vk_gadget_constraints = cs.num_constraints() - input_gadget_constraints - proof_gadget_constraints;
+
+        <TestSNARKGadget as SNARKVerifierGadget<TestSNARK>>::check_verify(
             cs.ns(|| "marlin_verify"),
             &vk_gadget,
             &input_gadget,
@@ -596,11 +344,8 @@ pub mod test {
         )
         .unwrap();
 
-        let verifier_gadget_constraints = cs.num_constraints() - proof_gadget_constraints;
-
-        verification_result
-            .enforce_equal(cs.ns(|| "enforce_equal_verification"), &Boolean::Constant(true))
-            .unwrap();
+        let verifier_gadget_constraints =
+            cs.num_constraints() - input_gadget_constraints - proof_gadget_constraints - vk_gadget_constraints;
 
         assert!(
             cs.is_satisfied(),
@@ -608,10 +353,10 @@ pub mod test {
             cs.which_is_unsatisfied().unwrap()
         );
 
-        const INPUT_GADGET_CONSTRAINTS: usize = 383;
-        const PROOF_GADGET_CONSTRAINTS: usize = 56;
-        const VK_GADGET_CONSTRAINTS: usize = 136;
-        const VERIFIER_GADGET_CONSTRAINTS: usize = 152885;
+        const INPUT_GADGET_CONSTRAINTS: usize = 259;
+        const PROOF_GADGET_CONSTRAINTS: usize = 48;
+        const VK_GADGET_CONSTRAINTS: usize = 32;
+        const VERIFIER_GADGET_CONSTRAINTS: usize = 132743;
 
         assert_eq!(input_gadget_constraints, INPUT_GADGET_CONSTRAINTS);
         assert_eq!(proof_gadget_constraints, PROOF_GADGET_CONSTRAINTS);
@@ -624,21 +369,14 @@ pub mod test {
 pub mod multiple_input_tests {
     use core::ops::MulAssign;
 
-    use snarkvm_curves::{
-        bls12_377::{Bls12_377, Fq, Fr},
-        bw6_761::BW6_761,
-    };
-    use snarkvm_fields::Field;
-    use snarkvm_gadgets::{
-        curves::bls12_377::PairingGadget as Bls12_377PairingGadget,
-        traits::{alloc::AllocGadget, eq::EqGadget},
-    };
-    use snarkvm_polycommit::marlin_pc::{marlin_kzg10::MarlinKZG10Gadget, MarlinKZG10};
-    use snarkvm_r1cs::TestConstraintSystem;
-    use snarkvm_utilities::{test_rng, UniformRand};
-
+    use super::*;
     use crate::{
-        constraints::snark::{MarlinSNARK, MarlinSNARKGadget},
+        constraints::{
+            proof::ProofVar,
+            snark::MarlinSNARK,
+            verifier::MarlinVerificationGadget,
+            verifier_key::CircuitVerifyingKeyVar,
+        },
         fiat_shamir::{
             FiatShamirAlgebraicSpongeRng,
             FiatShamirAlgebraicSpongeRngVar,
@@ -646,9 +384,27 @@ pub mod multiple_input_tests {
             PoseidonSpongeVar,
         },
         marlin::MarlinRecursiveMode,
+        FiatShamirRngVar,
     };
-
-    use super::*;
+    use snarkvm_algorithms::SRS;
+    use snarkvm_curves::{
+        bls12_377::{Bls12_377, Fq, Fr},
+        bw6_761::BW6_761,
+    };
+    use snarkvm_fields::Field;
+    use snarkvm_gadgets::{
+        curves::bls12_377::PairingGadget as Bls12_377PairingGadget,
+        nonnative::NonNativeFieldInputVar,
+        traits::{alloc::AllocGadget, eq::EqGadget},
+        Boolean,
+        SNARKVerifierGadget,
+    };
+    use snarkvm_polycommit::{
+        sonic_pc::{sonic_kzg10::SonicKZG10Gadget, SonicKZG10},
+        PCCheckVar,
+    };
+    use snarkvm_r1cs::{ConstraintSystem, SynthesisError, TestConstraintSystem};
+    use snarkvm_utilities::{test_rng, UniformRand};
 
     const ITERATIONS: usize = 10;
 
@@ -707,22 +463,16 @@ pub mod multiple_input_tests {
 
     pub struct VerifierCircuit<
         F: PrimeField,
-        ConstraintF: PrimeField,
-        PC: PolynomialCommitment<F>,
+        ConstraintF: PrimeField + PoseidonDefaultParametersField,
+        PC: PolynomialCommitment<F, ConstraintF>,
         FS: FiatShamirRng<F, ConstraintF>,
         MM: MarlinMode,
         PCG: PCCheckVar<F, PC, ConstraintF>,
         FSG: FiatShamirRngVar<F, ConstraintF, FS>,
-    >
-    where
-        PC::VerifierKey: ToConstraintField<ConstraintF>,
-        PC::Commitment: ToConstraintField<ConstraintF>,
-        PCG::VerifierKeyVar: ToConstraintFieldGadget<ConstraintF>,
-        PCG::CommitmentVar: ToConstraintFieldGadget<ConstraintF>,
-    {
+    > {
         pub c: F,
-        pub verifying_key: CircuitVerifyingKey<F, PC>,
-        pub proof: Proof<F, PC>,
+        pub verifying_key: CircuitVerifyingKey<F, ConstraintF, PC>,
+        pub proof: Proof<F, ConstraintF, PC>,
         _f: PhantomData<ConstraintF>,
         _fs: PhantomData<FS>,
         _marlin_mode: PhantomData<MM>,
@@ -732,18 +482,13 @@ pub mod multiple_input_tests {
 
     impl<
         F: PrimeField,
-        ConstraintF: PrimeField,
-        PC: PolynomialCommitment<F>,
+        ConstraintF: PrimeField + PoseidonDefaultParametersField,
+        PC: PolynomialCommitment<F, ConstraintF>,
         FS: FiatShamirRng<F, ConstraintF>,
         MM: MarlinMode,
         PCG: PCCheckVar<F, PC, ConstraintF>,
         FSG: FiatShamirRngVar<F, ConstraintF, FS>,
     > ConstraintSynthesizer<ConstraintF> for VerifierCircuit<F, ConstraintF, PC, FS, MM, PCG, FSG>
-    where
-        PC::VerifierKey: ToConstraintField<ConstraintF>,
-        PC::Commitment: ToConstraintField<ConstraintF>,
-        PCG::VerifierKeyVar: ToConstraintFieldGadget<ConstraintF>,
-        PCG::CommitmentVar: ToConstraintFieldGadget<ConstraintF>,
     {
         fn generate_constraints<CS: ConstraintSystem<ConstraintF>>(&self, cs: &mut CS) -> Result<(), SynthesisError> {
             let vk_gadget = CircuitVerifyingKeyVar::<F, ConstraintF, PC, PCG>::alloc(cs.ns(|| "vk"), || {
@@ -773,14 +518,14 @@ pub mod multiple_input_tests {
         }
     }
 
-    type PC = MarlinKZG10<Bls12_377>;
-    type PCGadget = MarlinKZG10Gadget<Bls12_377, BW6_761, Bls12_377PairingGadget>;
+    type PC = SonicKZG10<Bls12_377>;
+    type PCGadget = SonicKZG10Gadget<Bls12_377, BW6_761, Bls12_377PairingGadget>;
 
     type FS = FiatShamirAlgebraicSpongeRng<Fr, Fq, PoseidonSponge<Fq>>;
     type FSG = FiatShamirAlgebraicSpongeRngVar<Fr, Fq, PoseidonSponge<Fq>, PoseidonSpongeVar<Fq>>;
 
-    type TestSNARK = MarlinSNARK<Fr, Fq, PC, FS, MarlinRecursiveMode, Circuit<Fr>, Vec<Fr>>;
-    type TestSNARKGadget = MarlinSNARKGadget<Fr, Fq, PC, FS, MarlinRecursiveMode, PCGadget, FSG>;
+    type TestSNARK = MarlinSNARK<Fr, Fq, PC, FS, MarlinRecursiveMode, Vec<Fr>>;
+    type TestSNARKGadget = MarlinVerificationGadget<Fr, Fq, PC, PCGadget>;
 
     #[test]
     fn two_input_marlin_snark_test() {
@@ -803,7 +548,7 @@ pub mod multiple_input_tests {
 
             // Generate the circuit parameters.
 
-            let (pk, vk) = TestSNARK::circuit_specific_setup(circ, &mut rng).unwrap();
+            let (pk, vk) = TestSNARK::setup(&circ, &mut SRS::CircuitSpecific(&mut rng)).unwrap();
 
             // Test native proof and verification.
 
@@ -817,19 +562,19 @@ pub mod multiple_input_tests {
             // Initialize constraint system.
             let mut cs = TestConstraintSystem::<Fq>::new();
 
-            let input_gadget = <TestSNARKGadget as SNARKGadget<Fr, Fq, TestSNARK>>::InputVar::alloc_input(
+            let input_gadget = <TestSNARKGadget as SNARKVerifierGadget<TestSNARK>>::InputGadget::alloc_input(
                 cs.ns(|| "alloc_input_gadget"),
                 || Ok(vec![c.clone(), c]),
             )
             .unwrap();
 
-            let proof_gadget =
-                <TestSNARKGadget as SNARKGadget<Fr, Fq, TestSNARK>>::ProofVar::alloc(cs.ns(|| "alloc_proof"), || {
-                    Ok(proof)
-                })
-                .unwrap();
+            let proof_gadget = <TestSNARKGadget as SNARKVerifierGadget<TestSNARK>>::ProofGadget::alloc(
+                cs.ns(|| "alloc_proof"),
+                || Ok(proof),
+            )
+            .unwrap();
 
-            let vk_gadget = <TestSNARKGadget as SNARKGadget<Fr, Fq, TestSNARK>>::VerifyingKeyVar::alloc(
+            let vk_gadget = <TestSNARKGadget as SNARKVerifierGadget<TestSNARK>>::VerificationKeyGadget::alloc(
                 cs.ns(|| "alloc_vk"),
                 || Ok(vk.clone()),
             )
@@ -841,7 +586,7 @@ pub mod multiple_input_tests {
                 cs.which_is_unsatisfied().unwrap()
             );
 
-            let verification_result = <TestSNARKGadget as SNARKGadget<Fr, Fq, TestSNARK>>::verify(
+            <TestSNARKGadget as SNARKVerifierGadget<TestSNARK>>::check_verify(
                 cs.ns(|| "marlin_verify"),
                 &vk_gadget,
                 &input_gadget,
@@ -854,10 +599,6 @@ pub mod multiple_input_tests {
                 "Constraints not satisfied: {}",
                 cs.which_is_unsatisfied().unwrap()
             );
-
-            verification_result
-                .enforce_equal(cs.ns(|| "enforce_equal_verification"), &Boolean::Constant(true))
-                .unwrap();
 
             assert!(
                 cs.is_satisfied(),
@@ -888,7 +629,7 @@ pub mod multiple_input_tests {
 
             // Generate the circuit parameters.
 
-            let (pk, vk) = TestSNARK::circuit_specific_setup(circ, &mut rng).unwrap();
+            let (pk, vk) = TestSNARK::setup(&circ, &mut SRS::CircuitSpecific(&mut rng)).unwrap();
 
             // Test native proof and verification.
 
@@ -923,5 +664,63 @@ pub mod multiple_input_tests {
                 cs.which_is_unsatisfied().unwrap()
             );
         }
+    }
+
+    #[test]
+    fn marlin_test_nested_snark() {
+        let mut rng = test_rng();
+
+        // Construct the circuit.
+
+        let a = Fr::rand(&mut rng);
+        let b = Fr::rand(&mut rng);
+        let mut c = a;
+        c.mul_assign(&b);
+
+        let circ = Circuit {
+            a: Some(a),
+            b: Some(b),
+            num_constraints: 100,
+            num_variables: 25,
+        };
+
+        // Generate the circuit parameters.
+
+        let (pk, vk) = TestSNARK::setup(&circ, &mut SRS::CircuitSpecific(&mut rng)).unwrap();
+
+        // Test native proof and verification.
+
+        let proof = TestSNARK::prove(&pk, &circ, &mut rng).unwrap();
+
+        assert!(
+            TestSNARK::verify(&vk.clone().into(), &[c.clone(), c].to_vec(), &proof).unwrap(),
+            "The native verification check fails."
+        );
+
+        // Initialize constraint system.
+        let nested_circuit = VerifierCircuit::<Fr, Fq, PC, FS, MarlinRecursiveMode, PCGadget, FSG> {
+            c: c.clone(),
+            verifying_key: vk,
+            proof,
+            _f: PhantomData,
+            _fs: PhantomData,
+            _marlin_mode: PhantomData,
+            _pcg: PhantomData,
+            _fsg: PhantomData,
+        };
+
+        use snarkvm_algorithms::snark::groth16::Groth16;
+        type NestedSNARK = Groth16<BW6_761, Vec<Fq>>;
+
+        let (nested_pk, nested_vk) = NestedSNARK::setup(&nested_circuit, &mut SRS::CircuitSpecific(&mut rng)).unwrap();
+
+        // Test native proof and verification.
+
+        let nested_proof = NestedSNARK::prove(&nested_pk, &nested_circuit, &mut rng).unwrap();
+
+        assert!(
+            NestedSNARK::verify(&nested_vk.clone().into(), &vec![], &nested_proof).unwrap(),
+            "The native verification check fails."
+        );
     }
 }
