@@ -38,7 +38,6 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use rand_core::RngCore;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The Marlin proof system.
 #[derive(Clone, Debug)]
@@ -396,10 +395,6 @@ impl<
             fs_rng.absorb_bytes(&to_bytes_le![third_commitments, prover_third_message].unwrap());
         }
 
-        if terminator.load(Ordering::Relaxed) {
-            return Err(MarlinError::Terminated);
-        }
-
         let verifier_state = AHPForR1CS::verifier_third_round(verifier_state, &mut fs_rng)?;
         // --------------------------------------------------------------------
 
@@ -451,10 +446,6 @@ impl<
             false => assert_eq!(15, polynomials.len()),
         };
 
-        if terminator.load(Ordering::Relaxed) {
-            return Err(MarlinError::Terminated);
-        }
-
         // Gather commitments in one vector.
         #[rustfmt::skip]
             let commitments = vec![
@@ -492,10 +483,6 @@ impl<
             .chain(third_commitment_randomnesses)
             .collect();
 
-        if terminator.load(Ordering::Relaxed) {
-            return Err(MarlinError::Terminated);
-        }
-
         // Compute the AHP verifier's query set.
         let (query_set, verifier_state) = AHPForR1CS::verifier_query_set(verifier_state, &mut fs_rng, is_recursion);
         let lc_s =
@@ -507,7 +494,7 @@ impl<
 
         let eval_time = start_timer!(|| "Evaluating linear combinations over query set");
         let mut evaluations_unsorted = Vec::new();
-        for (label, point) in &query_set {
+        for (label, (_point_name, point)) in &query_set {
             let lc = lc_s
                 .iter()
                 .find(|lc| &lc.label == label)
@@ -516,10 +503,6 @@ impl<
             if !AHPForR1CS::<TargetField>::LC_WITH_ZERO_EVAL.contains(&lc.label.as_ref()) {
                 evaluations_unsorted.push((label.to_string(), evaluation));
             }
-        }
-
-        if terminator.load(Ordering::Relaxed) {
-            return Err(MarlinError::Terminated);
         }
 
         evaluations_unsorted.sort_by(|a, b| a.0.cmp(&b.0));
@@ -723,11 +706,11 @@ impl<
 
         let mut evaluation_labels = Vec::<(String, TargetField)>::new();
 
-        for q in query_set.iter().cloned() {
-            if AHPForR1CS::<TargetField>::LC_WITH_ZERO_EVAL.contains(&q.0.as_ref()) {
-                evaluations.insert(q, TargetField::zero());
+        for (label, (_point_name, q)) in query_set.iter().cloned() {
+            if AHPForR1CS::<TargetField>::LC_WITH_ZERO_EVAL.contains(&label.as_ref()) {
+                evaluations.insert((label, q), TargetField::zero());
             } else {
-                evaluation_labels.push(q);
+                evaluation_labels.push((label, q));
             }
         }
         evaluation_labels.sort_by(|a, b| a.0.cmp(&b.0));

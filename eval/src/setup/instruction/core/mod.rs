@@ -16,7 +16,6 @@
 
 use super::*;
 
-mod blake2s;
 pub mod common;
 pub use common::*;
 mod from_bits;
@@ -34,7 +33,6 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
         cs: &mut CS,
     ) -> Result<ConstrainedValue<F, G>> {
         match name {
-            blake2s::BLAKE2S_HASH_CORE => self.call_core_blake2s_hash(arguments, cs),
             len::LEN_CORE => self.call_core_len(arguments),
             // to_bits_le
             to_bits::ADDRESS_TO_BITS_LE_CORE => self.call_core_address_to_bits_le(arguments, cs),

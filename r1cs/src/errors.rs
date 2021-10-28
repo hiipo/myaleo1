@@ -46,6 +46,9 @@ pub enum SynthesisError {
     /// During CRS generation, we observed an unconstrained auxiliary variable
     #[error("Auxiliary variable was unconstrained")]
     UnconstrainedVariable,
+    /// During synthesis, we overflowed an integer.
+    #[error("integer overflow")]
+    Overflow,
 }
 
 impl From<std::io::Error> for SynthesisError {

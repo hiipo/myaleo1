@@ -87,13 +87,6 @@ pub trait SNARK: Clone + Debug {
         Self::prove_with_terminator(proving_key, input_and_witness, &AtomicBool::new(false), rng)
     }
 
-    fn prove_with_terminator<R: Rng>(
-        proving_key: &Self::ProvingKey,
-        input_and_witness: &Self::AllocatedCircuit,
-        terminator: &AtomicBool,
-        rng: &mut R,
-    ) -> Result<Self::Proof, SNARKError>;
-
     fn verify_prepared(
         prepared_verifying_key: &Self::PreparedVerifyingKey,
         input: &Self::VerifierInput,

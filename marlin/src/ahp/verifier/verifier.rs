@@ -139,10 +139,10 @@ impl<TargetField: PrimeField> AHPForR1CS<TargetField> {
         //  LinearCombination::new("z_b", vec![(F::one(), z_b)])
         //  LinearCombination::new("g_1", vec![(F::one(), g_1)], rhs::new(g_1_at_beta))
         //  LinearCombination::new("t", vec![(F::one(), t)])
-        query_set.insert(("g_1".into(), beta));
-        query_set.insert(("z_b".into(), beta));
-        query_set.insert(("t".into(), beta));
-        query_set.insert(("outer_sumcheck".into(), beta));
+        query_set.insert(("g_1".into(), ("beta".into(), beta)));
+        query_set.insert(("z_b".into(), ("beta".into(), beta)));
+        query_set.insert(("t".into(), ("beta".into(), beta)));
+        query_set.insert(("outer_sumcheck".into(), ("beta".into(), beta)));
 
         // For the second linear combination
         // Inner sumcheck test:
@@ -188,9 +188,9 @@ impl<TargetField: PrimeField> AHPForR1CS<TargetField> {
         query_set.insert(("inner_sumcheck".into(), ("gamma".into(), gamma)));
 
         if with_vanishing {
-            query_set.insert(("vanishing_poly_h_alpha".into(), alpha));
-            query_set.insert(("vanishing_poly_h_beta".into(), beta));
-            query_set.insert(("vanishing_poly_k_gamma".into(), gamma));
+            query_set.insert(("vanishing_poly_h_alpha".into(), ("alpha".into(), alpha)));
+            query_set.insert(("vanishing_poly_h_beta".into(), ("beta".into(), beta)));
+            query_set.insert(("vanishing_poly_k_gamma".into(), ("gamma".into(), gamma)));
         }
 
         (query_set, state)

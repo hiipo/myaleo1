@@ -16,7 +16,7 @@
 
 use crate::{errors::AddressError, ConstrainedValue, GroupType};
 
-use snarkvm_dpc::{account::address, testnet1::instantiated::Components};
+use snarkvm_dpc::{account::address, testnet2::Testnet2};
 use snarkvm_fields::PrimeField;
 use snarkvm_gadgets::{
     boolean::Boolean,
@@ -36,7 +36,7 @@ use std::{borrow::Borrow, str::FromStr};
 /// A public address
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Address {
-    pub address: address::Address<Components>,
+    pub address: address::Address<Testnet2>,
     pub bytes: Vec<UInt8>,
 }
 
@@ -81,7 +81,7 @@ impl Address {
 
     pub(crate) fn alloc_helper<Fn: FnOnce() -> Result<T, SynthesisError>, T: Borrow<String>>(
         value_gen: Fn,
-    ) -> Result<address::Address<Components>, SynthesisError> {
+    ) -> Result<address::Address<Testnet2>, SynthesisError> {
         let address_string = match value_gen() {
             Ok(value) => {
                 let string_value = value.borrow().clone();
