@@ -82,6 +82,9 @@ pub enum InstructionOp {
 
     // FFI/Core
     CallCore,
+
+    // Entrypoint
+    CallEntryPoint,
 }
 
 impl InstructionOp {
@@ -128,6 +131,7 @@ impl InstructionOp {
             InstructionOp::Assert => "assert",
             InstructionOp::Log => "log",
             InstructionOp::CallCore => "ccall",
+            InstructionOp::CallEntryPoint => "ecall",
         }
     }
 }

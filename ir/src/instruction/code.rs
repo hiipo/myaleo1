@@ -60,6 +60,7 @@ impl Instruction {
             Instruction::Assert(_) => InstructionOp::Assert,
             Instruction::Log(_) => InstructionOp::Log,
             Instruction::CallCore(_) => InstructionOp::CallCore,
+            Instruction::CallEntrypoint(_) => InstructionOp::CallEntryPoint,
         }
     }
 
@@ -106,6 +107,7 @@ impl Instruction {
             Instruction::Assert(x) => x.encode(),
             Instruction::Log(x) => x.encode(),
             Instruction::CallCore(x) => x.encode(),
+            Instruction::CallEntrypoint(x) => x.encode(),
         }
     }
 
@@ -170,6 +172,9 @@ impl Instruction {
                 InstructionOp::Assert => Instruction::Assert(PredicateData::decode(instruction.operands)?),
                 InstructionOp::Log => Instruction::Log(LogData::decode(instruction.operands)?),
                 InstructionOp::CallCore => Instruction::CallCore(CallCoreData::decode(instruction.operands)?),
+                InstructionOp::CallEntryPoint => {
+                    Instruction::CallEntrypoint(CallEntrypointData::decode(instruction.operands)?)
+                }
             },
         )
     }

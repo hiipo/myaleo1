@@ -123,3 +123,53 @@ impl CallCoreData {
         operands
     }
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallEntrypointData {
+    pub destination: u32,
+    pub index: u32, // index of function (of all defined functions, not instruction index)
+    pub arguments: Vec<Value>,
+}
+
+impl fmt::Display for CallEntrypointData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "&v{}, f{}", self.destination, self.index)?;
+        for value in &self.arguments {
+            write!(f, ", {}", value)?;
+        }
+        Ok(())
+    }
+}
+
+impl CallEntrypointData {
+    pub(crate) fn decode(operands: Vec<ir::Operand>) -> Result<Self> {
+        if operands.len() < 2 {
+            return Err(anyhow!("illegal operand count for RepeatData: {}", operands.len()));
+        }
+        let mut operands = operands.into_iter();
+        let destination = decode_control_u32(operands.next().unwrap())?;
+        let index = decode_control_u32(operands.next().unwrap())?;
+        let arguments = operands.map(Value::decode).collect::<Result<Vec<Value>>>()?;
+        Ok(Self {
+            destination,
+            index,
+            arguments,
+        })
+    }
+
+    pub(crate) fn encode(&self) -> Vec<ir::Operand> {
+        let mut operands = vec![];
+        operands.push(ir::Operand {
+            u32: Some(ir::U32 { u32: self.destination }),
+            ..Default::default()
+        });
+        operands.push(ir::Operand {
+            u32: Some(ir::U32 { u32: self.index }),
+            ..Default::default()
+        });
+        for value in self.arguments.iter() {
+            operands.push(value.encode());
+        }
+        operands
+    }
+}
