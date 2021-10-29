@@ -125,13 +125,13 @@ impl CallCoreData {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CallEntrypointData {
+pub struct CallEntryPointData {
     pub destination: u32,
     pub index: u32, // index of function (of all defined functions, not instruction index)
     pub arguments: Vec<Value>,
 }
 
-impl fmt::Display for CallEntrypointData {
+impl fmt::Display for CallEntryPointData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "&v{}, f{}", self.destination, self.index)?;
         for value in &self.arguments {
@@ -141,7 +141,7 @@ impl fmt::Display for CallEntrypointData {
     }
 }
 
-impl CallEntrypointData {
+impl CallEntryPointData {
     pub(crate) fn decode(operands: Vec<ir::Operand>) -> Result<Self> {
         if operands.len() < 2 {
             return Err(anyhow!("illegal operand count for RepeatData: {}", operands.len()));

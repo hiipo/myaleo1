@@ -193,8 +193,3 @@ message Program {
     Header header = 1;
     repeated Function functions = 2;
 }
-
-message Entrypoint {
-    uint32 argument_start_variable = 1;
-    repeated Instruction instructions = 2;
-}

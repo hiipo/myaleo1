@@ -339,8 +339,8 @@ impl<'a, F: PrimeField, G: GroupType<F>> EvaluatorState<'a, F, G> {
                 let out = self.call_core(&**identifier, &arguments, cs)?;
                 self.store(*destination, out);
             }
-            Instruction::CallEntrypoint(_) => {
-                todo!()
+            Instruction::CallEntryPoint(_) => {
+                todo!("handle entrypoint calls")
             }
         }
         Ok(None)

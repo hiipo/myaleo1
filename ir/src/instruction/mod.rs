@@ -103,7 +103,7 @@ pub enum Instruction {
 
     // FFI/Core
     CallCore(CallCoreData),
-    CallEntrypoint(CallEntrypointData),
+    CallEntryPoint(CallEntryPointData),
 }
 
 fn decode_control_u32(operand: ir::Operand) -> Result<u32> {
@@ -176,7 +176,7 @@ impl fmt::Display for Instruction {
             Instruction::Assert(x) => x.fmt(f)?,
             Instruction::Log(x) => x.fmt(f)?,
             Instruction::CallCore(x) => x.fmt(f)?,
-            Instruction::CallEntrypoint(x) => x.fmt(f)?,
+            Instruction::CallEntryPoint(x) => x.fmt(f)?,
         }
         Ok(())
     }
