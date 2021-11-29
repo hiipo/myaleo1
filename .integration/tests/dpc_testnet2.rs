@@ -25,11 +25,9 @@ use rand_chacha::ChaChaRng;
 
 #[test]
 fn test_testnet2_inner_circuit_id_sanity_check() {
-    let expected_inner_circuit_id = vec![
-        30, 194, 18, 101, 217, 127, 95, 56, 1, 16, 100, 166, 24, 193, 5, 246, 138, 62, 201, 223, 78, 91, 206, 192, 37,
-        207, 190, 61, 194, 184, 218, 113, 29, 159, 166, 20, 29, 24, 83, 93, 167, 231, 108, 57, 56, 81, 125, 0,
-    ];
-    let candidate_inner_circuit_id = <Testnet2 as Network>::inner_circuit_id().to_bytes_le().unwrap();
+    let expected_inner_circuit_id =
+        "ic1ustf9033ta3yx788ddf6czm9lgansfz5je6au5jn38mw33fw3hw7uvjx58rd0ylshmsjaw2mayesq3h0rag".to_string();
+    let candidate_inner_circuit_id = <Testnet2 as Network>::inner_circuit_id().to_string();
     assert_eq!(expected_inner_circuit_id, candidate_inner_circuit_id);
 }
 
@@ -40,7 +38,7 @@ fn dpc_testnet2_integration_test() {
 
     let mut ledger = Ledger::<Testnet2>::new().unwrap();
     assert_eq!(ledger.latest_block_height(), 0);
-    assert_eq!(ledger.latest_block_hash(), Testnet2::genesis_block().block_hash());
+    assert_eq!(ledger.latest_block_hash(), Testnet2::genesis_block().hash());
     assert_eq!(&ledger.latest_block().unwrap(), Testnet2::genesis_block());
     assert_eq!((*ledger.latest_block_transactions().unwrap()).len(), 1);
     assert_eq!(
@@ -50,7 +48,7 @@ fn dpc_testnet2_integration_test() {
 
     // Construct the previous block hash and new block height.
     let previous_block = ledger.latest_block().unwrap();
-    let previous_hash = previous_block.block_hash();
+    let previous_hash = previous_block.hash();
     let block_height = previous_block.header().height() + 1;
     assert_eq!(block_height, 1);
 
@@ -65,14 +63,14 @@ fn dpc_testnet2_integration_test() {
         assert_eq!(coinbase_transaction, recovered_transaction);
 
         // Check that coinbase record can be decrypted from the transaction.
-        let encrypted_record = &coinbase_transaction.ciphertexts()[0];
+        let encrypted_record = coinbase_transaction.ciphertexts().next().unwrap();
         let view_key = ViewKey::from_private_key(recipient.private_key());
-        let decrypted_record = encrypted_record.decrypt(&view_key).unwrap();
+        let decrypted_record = Record::from_account_view_key(&view_key, encrypted_record).unwrap();
         assert_eq!(decrypted_record.owner(), recipient.address());
-        assert_eq!(decrypted_record.value() as i64, Block::<Testnet2>::block_reward(1).0);
+        assert_eq!(decrypted_record.value(), Block::<Testnet2>::block_reward(1));
     }
     let transactions = Transactions::from(&[coinbase_transaction]).unwrap();
-    let transactions_root = transactions.to_transactions_root().unwrap();
+    let transactions_root = transactions.transactions_root();
 
     let previous_ledger_root = ledger.latest_ledger_root();
     let timestamp = Utc::now().timestamp();
@@ -81,12 +79,16 @@ fn dpc_testnet2_integration_test() {
         previous_block.difficulty_target(),
         timestamp,
     );
+    let cumulative_weight = previous_block
+        .cumulative_weight()
+        .saturating_add(u64::MAX - difficulty_target);
 
     // Construct the new block header.
     let header = BlockHeader::mine(
         block_height,
         timestamp,
         difficulty_target,
+        cumulative_weight,
         previous_ledger_root,
         transactions_root,
         &AtomicBool::new(false),

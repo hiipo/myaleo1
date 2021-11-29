@@ -66,6 +66,11 @@ impl<N: Network> Ledger<N> {
         self.canon_blocks.latest_block_difficulty_target()
     }
 
+    /// Returns the latest cumulative weight.
+    pub fn latest_cumulative_weight(&self) -> Result<u64> {
+        self.canon_blocks.latest_cumulative_weight()
+    }
+
     /// Returns the latest block transactions.
     pub fn latest_block_transactions(&self) -> Result<&Transactions<N>> {
         self.canon_blocks.latest_block_transactions()
@@ -103,7 +108,7 @@ impl<N: Network> Ledger<N> {
     /// Adds the given orphan block, if it is well-formed and does not already exist.
     pub fn add_orphan_block(&mut self, block: &Block<N>) -> Result<()> {
         // Ensure the block does not exist in canon.
-        if self.canon_blocks.contains_block_hash(&block.block_hash()) {
+        if self.canon_blocks.contains_block_hash(&block.hash()) {
             return Err(anyhow!("Orphan block already exists in canon chain"));
         }
 
@@ -121,14 +126,14 @@ impl<N: Network> Ledger<N> {
         }
 
         // Ensure the transaction does not contain serial numbers already in the canon chain.
-        for serial_number in &transaction.serial_numbers() {
+        for serial_number in transaction.serial_numbers() {
             if self.canon_blocks.contains_serial_number(serial_number) {
                 return Err(anyhow!("Transaction contains a serial number already in existence"));
             }
         }
 
         // Ensure the transaction does not contain commitments already in the canon chain.
-        for commitment in &transaction.commitments() {
+        for commitment in transaction.commitments() {
             if self.canon_blocks.contains_commitment(commitment) {
                 return Err(anyhow!("Transaction contains a commitment already in existence"));
             }
@@ -154,9 +159,11 @@ impl<N: Network> Ledger<N> {
         // Compute the block difficulty target.
         let previous_timestamp = self.latest_block_timestamp()?;
         let previous_difficulty_target = self.latest_block_difficulty_target()?;
+        let previous_cumulative_weight = self.latest_cumulative_weight()?;
         let block_timestamp = Utc::now().timestamp();
         let difficulty_target =
             Blocks::<N>::compute_difficulty_target(previous_timestamp, previous_difficulty_target, block_timestamp);
+        let cumulative_weight = previous_cumulative_weight.saturating_add(u64::MAX - difficulty_target);
 
         // Construct the new block transactions.
         let amount = Block::<N>::block_reward(block_height);
@@ -172,6 +179,7 @@ impl<N: Network> Ledger<N> {
             block_height,
             block_timestamp,
             difficulty_target,
+            cumulative_weight,
             previous_ledger_root,
             transactions,
             terminator,
@@ -182,7 +190,7 @@ impl<N: Network> Ledger<N> {
         self.add_next_block(&block)?;
 
         // On success, clear the memory pool of its transactions.
-        self.memory_pool.clear_transactions();
+        self.memory_pool.clear_all_transactions();
 
         Ok(())
     }

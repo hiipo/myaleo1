@@ -48,14 +48,14 @@ impl<N: Network> Blocks<N> {
 
         let mut blocks = Self {
             current_height: height,
-            current_hash: genesis_block.block_hash(),
+            current_hash: genesis_block.hash(),
             ledger_tree: LedgerTree::<N>::new()?,
             previous_hashes: Default::default(),
             headers: Default::default(),
             transactions: Default::default(),
         };
 
-        blocks.ledger_tree.add(&genesis_block.block_hash())?;
+        blocks.ledger_tree.add(&genesis_block.hash())?;
         blocks
             .previous_hashes
             .insert(height, genesis_block.previous_block_hash());
@@ -88,6 +88,11 @@ impl<N: Network> Blocks<N> {
     /// Returns the latest block difficulty target.
     pub fn latest_block_difficulty_target(&self) -> Result<u64> {
         Ok(self.get_block_header(self.current_height)?.difficulty_target())
+    }
+
+    /// Returns the latest cumulative weight.
+    pub fn latest_cumulative_weight(&self) -> Result<u64> {
+        Ok(self.get_block_header(self.current_height)?.cumulative_weight())
     }
 
     /// Returns the latest block transactions.
@@ -183,20 +188,18 @@ impl<N: Network> Blocks<N> {
 
     /// Returns `true` if the given serial number exists.
     pub fn contains_serial_number(&self, serial_number: &N::SerialNumber) -> bool {
-        // TODO (howardwu): Optimize this operation.
         self.transactions
             .values()
             .flat_map(|transactions| (**transactions).iter().map(Transaction::serial_numbers))
-            .any(|serial_numbers| serial_numbers.contains(serial_number))
+            .any(|mut serial_numbers| serial_numbers.contains(serial_number))
     }
 
     /// Returns `true` if the given commitment exists.
     pub fn contains_commitment(&self, commitment: &N::Commitment) -> bool {
-        // TODO (howardwu): Optimize this operation.
         self.transactions
             .values()
             .flat_map(|transactions| (**transactions).iter().map(Transaction::commitments))
-            .any(|commitments| commitments.contains(commitment))
+            .any(|mut commitments| commitments.contains(commitment))
     }
 
     /// Adds the given block as the next block in the chain.
@@ -223,7 +226,7 @@ impl<N: Network> Blocks<N> {
         }
 
         // Ensure the block hash does not already exist.
-        let block_hash = block.block_hash();
+        let block_hash = block.hash();
         if self.contains_block_hash(&block_hash) {
             return Err(anyhow!("The given block hash already exists in the ledger"));
         }
@@ -236,7 +239,7 @@ impl<N: Network> Blocks<N> {
 
         // Ensure the next block timestamp is after the current block timestamp.
         let current_block = self.latest_block()?;
-        if block.timestamp() < current_block.timestamp() {
+        if block.timestamp() <= current_block.timestamp() {
             return Err(anyhow!("The given block timestamp is before the current timestamp"));
         }
 
@@ -251,6 +254,18 @@ impl<N: Network> Blocks<N> {
                 "The given block difficulty target is incorrect. Found {}, but expected {}",
                 block.difficulty_target(),
                 expected_difficulty_target
+            ));
+        }
+
+        // Ensure the expected cumulative weight is computed correctly.
+        let expected_cumulative_weight = current_block
+            .cumulative_weight()
+            .saturating_add(u64::MAX - expected_difficulty_target);
+        if block.cumulative_weight() != expected_cumulative_weight {
+            return Err(anyhow!(
+                "The given cumulative weight is incorrect. Found {}, but expected {}",
+                block.cumulative_weight(),
+                expected_cumulative_weight
             ));
         }
 
@@ -269,16 +284,14 @@ impl<N: Network> Blocks<N> {
         }
 
         // Ensure the ledger does not already contain a given serial numbers.
-        let serial_numbers = block.serial_numbers();
-        for serial_number in &serial_numbers {
+        for serial_number in block.serial_numbers() {
             if self.contains_serial_number(serial_number) {
                 return Err(anyhow!("Serial number already exists in the ledger"));
             }
         }
 
         // Ensure the ledger does not already contain a given commitments.
-        let commitments = block.commitments();
-        for commitment in &commitments {
+        for commitment in block.commitments() {
             if self.contains_commitment(commitment) {
                 return Err(anyhow!("Commitment already exists in the ledger"));
             }
@@ -290,7 +303,7 @@ impl<N: Network> Blocks<N> {
 
             blocks.current_height = height;
             blocks.current_hash = block_hash;
-            blocks.ledger_tree.add(&block.block_hash())?;
+            blocks.ledger_tree.add(&block.hash())?;
             blocks.previous_hashes.insert(height, block.previous_block_hash());
             blocks.headers.insert(height, block.header().clone());
             blocks.transactions.insert(height, block.transactions().clone());
@@ -369,7 +382,7 @@ impl<N: Network> Blocks<N> {
         };
 
         // Compute the block header inclusion proof.
-        let transactions_root = transactions.to_transactions_root()?;
+        let transactions_root = transactions.transactions_root();
         let block_header_inclusion_proof = block_header.to_header_inclusion_proof(1, transactions_root)?;
         let block_header_root = block_header.to_header_root()?;
         let previous_block_hash = self.get_previous_block_hash(self.current_height)?;
@@ -393,7 +406,6 @@ impl<N: Network> Blocks<N> {
 
     /// Returns the expected difficulty target given the previous block and expected next block details.
     pub fn compute_difficulty_target(previous_timestamp: i64, previous_difficulty_target: u64, timestamp: i64) -> u64 {
-        const TARGET_BLOCK_TIME_IN_SECS: i64 = 20i64;
         const NUM_BLOCKS_PER_RETARGET: i64 = 1i64;
 
         /// Bitcoin difficulty retarget algorithm.
@@ -421,7 +433,7 @@ impl<N: Network> Blocks<N> {
         bitcoin_retarget(
             timestamp,
             previous_timestamp,
-            TARGET_BLOCK_TIME_IN_SECS,
+            N::ALEO_BLOCK_TIME_IN_SECS,
             previous_difficulty_target,
         )
     }
@@ -436,8 +448,6 @@ mod tests {
 
     #[test]
     fn test_retargeting_algorithm_increased() {
-        const TARGET_BLOCK_TIME_IN_SECS: i64 = 20i64;
-
         let rng = &mut thread_rng();
 
         let mut block_difficulty_target = u64::MAX;
@@ -445,7 +455,8 @@ mod tests {
 
         for _ in 0..1000 {
             // Simulate a random block time.
-            let simulated_block_time = rng.gen_range(TARGET_BLOCK_TIME_IN_SECS / 2..TARGET_BLOCK_TIME_IN_SECS * 2);
+            let simulated_block_time =
+                rng.gen_range(Testnet2::ALEO_BLOCK_TIME_IN_SECS / 2..Testnet2::ALEO_BLOCK_TIME_IN_SECS * 2);
             let new_timestamp = current_timestamp + simulated_block_time;
 
             let new_target = Blocks::<Testnet2>::compute_difficulty_target(
@@ -454,10 +465,10 @@ mod tests {
                 new_timestamp,
             );
 
-            if simulated_block_time < TARGET_BLOCK_TIME_IN_SECS {
+            if simulated_block_time < Testnet2::ALEO_BLOCK_TIME_IN_SECS {
                 // If the block was found faster than expected, the difficulty should increase.
                 assert!(new_target < block_difficulty_target);
-            } else if simulated_block_time >= TARGET_BLOCK_TIME_IN_SECS {
+            } else if simulated_block_time >= Testnet2::ALEO_BLOCK_TIME_IN_SECS {
                 // If the block was found slower than expected, the difficulty should decrease.
                 assert!(new_target >= block_difficulty_target);
             }

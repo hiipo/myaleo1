@@ -17,6 +17,7 @@
 use crate::{
     Address,
     AleoAmount,
+    BlockError,
     BlockHeader,
     LedgerProof,
     LedgerTree,
@@ -26,18 +27,20 @@ use crate::{
     Transactions,
 };
 use snarkvm_algorithms::CRH;
-use snarkvm_utilities::{to_bytes_le, FromBytes, ToBytes};
+use snarkvm_utilities::{to_bytes_le, FromBytes, FromBytesDeserializer, ToBytes, ToBytesSerializer};
 
 use anyhow::{anyhow, Result};
 use rand::{CryptoRng, Rng};
-use serde::{Deserialize, Serialize};
+use serde::{de, ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer};
 use std::{
+    fmt,
     io::{Read, Result as IoResult, Write},
+    str::FromStr,
     sync::atomic::AtomicBool,
     time::Instant,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block<N: Network> {
     /// Hash of this block.
     block_hash: N::BlockHash,
@@ -56,6 +59,7 @@ impl<N: Network> Block<N> {
         block_height: u32,
         block_timestamp: i64,
         difficulty_target: u64,
+        cumulative_weight: u64,
         previous_ledger_root: N::LedgerRoot,
         transactions: Transactions<N>,
         terminator: &AtomicBool,
@@ -68,13 +72,14 @@ impl<N: Network> Block<N> {
             block_height,
             block_timestamp,
             difficulty_target,
+            cumulative_weight,
             previous_ledger_root,
-            transactions.to_transactions_root()?,
+            transactions.transactions_root(),
             terminator,
             rng,
         )?;
 
-        Self::from(previous_block_hash, header, transactions)
+        Ok(Self::from(previous_block_hash, header, transactions)?)
     }
 
     /// Initializes a new genesis block with one coinbase transaction.
@@ -85,18 +90,20 @@ impl<N: Network> Block<N> {
         println!("{} seconds", (Instant::now() - start).as_secs());
 
         // Compute the transactions root from the transactions.
-        let transactions_root = transactions.to_transactions_root()?;
+        let transactions_root = transactions.transactions_root();
 
         // Construct the genesis block header metadata.
         let block_height = 0u32;
         let block_timestamp = 0i64;
         let difficulty_target = u64::MAX;
+        let cumulative_weight = 0u64;
 
         // Compute the genesis block header.
         let header = BlockHeader::mine(
             block_height,
             block_timestamp,
             difficulty_target,
+            cumulative_weight,
             LedgerTree::<N>::new()?.root(),
             transactions_root,
             &AtomicBool::new(false),
@@ -121,9 +128,11 @@ impl<N: Network> Block<N> {
         previous_block_hash: N::BlockHash,
         header: BlockHeader<N>,
         transactions: Transactions<N>,
-    ) -> Result<Self> {
+    ) -> Result<Self, BlockError> {
         // Compute the block hash.
-        let block_hash = N::block_hash_crh().hash(&to_bytes_le![previous_block_hash, header.to_header_root()?]?)?;
+        let block_hash = N::block_hash_crh()
+            .hash(&to_bytes_le![previous_block_hash, header.to_header_root()?]?)?
+            .into();
 
         // Construct the block.
         let block = Self {
@@ -136,7 +145,7 @@ impl<N: Network> Block<N> {
         // Ensure the block is valid.
         match block.is_valid() {
             true => Ok(block),
-            false => Err(anyhow!("Failed to initialize a block from given inputs")),
+            false => Err(anyhow!("Failed to initialize a block from given inputs").into()),
         }
     }
 
@@ -169,17 +178,8 @@ impl<N: Network> Block<N> {
             return false;
         }
 
-        // Fetch the transactions root.
-        let transactions_root = match self.transactions.to_transactions_root() {
-            Ok(transactions_root) => transactions_root,
-            Err(error) => {
-                eprintln!("{}", error);
-                return false;
-            }
-        };
-
         // Ensure the transactions root matches the computed root from the transactions list.
-        if self.header.transactions_root() != transactions_root {
+        if self.header.transactions_root() != self.transactions.transactions_root() {
             eprintln!("Invalid block transactions does not match transactions root in header");
             return false;
         }
@@ -202,19 +202,11 @@ impl<N: Network> Block<N> {
         }
 
         // Ensure the coinbase reward less transaction fees is less than or equal to the block reward.
-        match self.transactions.to_net_value_balance() {
-            Ok(net_value_balance) => {
-                let candidate_block_reward = AleoAmount::ZERO.sub(net_value_balance); // Make it a positive number.
-                if candidate_block_reward > block_reward {
-                    eprintln!("Block reward must be <= {}", block_reward);
-                    return false;
-                }
-            }
-            Err(error) => {
-                eprintln!("{}", error);
-                return false;
-            }
-        };
+        let candidate_block_reward = AleoAmount::ZERO.sub(self.transactions.net_value_balance()); // Make it a positive number.
+        if candidate_block_reward > block_reward {
+            eprintln!("Block reward must be <= {}", block_reward);
+            return false;
+        }
 
         true
     }
@@ -226,7 +218,7 @@ impl<N: Network> Block<N> {
     }
 
     /// Returns the hash of this block.
-    pub fn block_hash(&self) -> N::BlockHash {
+    pub fn hash(&self) -> N::BlockHash {
         self.block_hash
     }
 
@@ -270,19 +262,24 @@ impl<N: Network> Block<N> {
         self.header.difficulty_target()
     }
 
+    /// Returns the cumulative weight up to this block (inclusive).
+    pub fn cumulative_weight(&self) -> u64 {
+        self.header.cumulative_weight()
+    }
+
     /// Returns the block nonce.
-    pub fn nonce(&self) -> N::InnerScalarField {
+    pub fn nonce(&self) -> N::PoSWNonce {
         self.header.nonce()
     }
 
     /// Returns the serial numbers in the block, by constructing a flattened list of serial numbers from all transactions.
-    pub fn serial_numbers(&self) -> Vec<N::SerialNumber> {
-        self.transactions.serial_numbers().collect()
+    pub fn serial_numbers(&self) -> impl Iterator<Item = &N::SerialNumber> + '_ {
+        self.transactions.serial_numbers()
     }
 
     /// Returns the commitments in the block, by constructing a flattened list of commitments from all transactions.
-    pub fn commitments(&self) -> Vec<N::Commitment> {
-        self.transactions.commitments().collect()
+    pub fn commitments(&self) -> impl Iterator<Item = &N::Commitment> + '_ {
+        self.transactions.commitments()
     }
 
     /// Returns the coinbase transaction for the block.
@@ -308,25 +305,29 @@ impl<N: Network> Block<N> {
     ///
     /// Returns the block reward for the given block height.
     ///
-    /// TODO (howardwu): CRITICAL - Update this with the correct emission schedule.
-    ///
     pub fn block_reward(height: u32) -> AleoAmount {
         match height == 0 {
             true => {
                 // Output the starting supply as the genesis block reward.
-                AleoAmount::from_bytes(N::ALEO_STARTING_SUPPLY_IN_CREDITS * AleoAmount::ONE_CREDIT.0)
+                AleoAmount::from_i64(N::ALEO_STARTING_SUPPLY_IN_CREDITS * AleoAmount::ONE_CREDIT.0)
             }
             false => {
-                let expected_blocks_per_hour: u32 = 180;
+                // The initial blocks that aren't taken into account with the halving calculation.
+                // The time it takes before the halving - 4,730,400 blocks (approximately 3 years).
+                let expected_blocks_per_hour: u32 = 3600 / (N::ALEO_BLOCK_TIME_IN_SECS as u32);
                 let num_years = 3;
                 let block_segments = num_years * 365 * 24 * expected_blocks_per_hour;
 
-                // The block reward halves at most 2 times - minimum is 37.5 ALEO after 8 years.
-                let initial_reward = 150i64 * AleoAmount::ONE_CREDIT.0;
-                let num_halves = u32::min(height / block_segments, 2);
+                // The block reward halves at most 2 times - minimum is 25 ALEO.
+                // The reward will halve at blocks `4,730,400` and `9,460,800`.
+                // Blocks 1 to 4,730,400         - 100 CREDITS
+                // Blocks 4,730,401 to 9,460,800 - 50 CREDITS
+                // Blocks 9,460,801+             - 25 CREDITS
+                let initial_reward = 100i64 * AleoAmount::ONE_CREDIT.0;
+                let num_halves = u32::min(height.saturating_sub(1) / block_segments, 2);
                 let reward = initial_reward / (2_u64.pow(num_halves)) as i64;
 
-                AleoAmount::from_bytes(reward)
+                AleoAmount::from_i64(reward)
             }
         }
     }
@@ -335,20 +336,89 @@ impl<N: Network> Block<N> {
 impl<N: Network> FromBytes for Block<N> {
     #[inline]
     fn read_le<R: Read>(mut reader: R) -> IoResult<Self> {
+        let block_hash: N::BlockHash = FromBytes::read_le(&mut reader)?;
         let previous_block_hash = FromBytes::read_le(&mut reader)?;
         let header = FromBytes::read_le(&mut reader)?;
         let transactions = FromBytes::read_le(&mut reader)?;
+        let block = Self::from(previous_block_hash, header, transactions)?;
 
-        Ok(Self::from(previous_block_hash, header, transactions).expect("Failed to deserialize a block"))
+        match block_hash == block.hash() {
+            true => Ok(block),
+            false => Err(BlockError::Message("Mismatching block hash, possible data corruption".to_string()).into()),
+        }
     }
 }
 
 impl<N: Network> ToBytes for Block<N> {
     #[inline]
     fn write_le<W: Write>(&self, mut writer: W) -> IoResult<()> {
+        self.block_hash.write_le(&mut writer)?;
         self.previous_block_hash.write_le(&mut writer)?;
         self.header.write_le(&mut writer)?;
         self.transactions.write_le(&mut writer)
+    }
+}
+
+impl<N: Network> FromStr for Block<N> {
+    type Err = anyhow::Error;
+
+    fn from_str(block: &str) -> Result<Self, Self::Err> {
+        Ok(serde_json::from_str(&block)?)
+    }
+}
+
+impl<N: Network> fmt::Display for Block<N> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            serde_json::to_string(self).map_err::<fmt::Error, _>(serde::ser::Error::custom)?
+        )
+    }
+}
+
+impl<N: Network> Serialize for Block<N> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match serializer.is_human_readable() {
+            true => {
+                let mut block = serializer.serialize_struct("Block", 4)?;
+                block.serialize_field("block_hash", &self.block_hash)?;
+                block.serialize_field("previous_block_hash", &self.previous_block_hash)?;
+                block.serialize_field("header", &self.header)?;
+                block.serialize_field("transactions", &self.transactions)?;
+                block.end()
+            }
+            false => ToBytesSerializer::serialize_with_size_encoding(self, serializer),
+        }
+    }
+}
+
+impl<'de, N: Network> Deserialize<'de> for Block<N> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match deserializer.is_human_readable() {
+            true => {
+                let block = serde_json::Value::deserialize(deserializer)?;
+                let block_hash: N::BlockHash =
+                    serde_json::from_value(block["block_hash"].clone()).map_err(de::Error::custom)?;
+
+                // Recover the block.
+                let block = Self::from(
+                    serde_json::from_value(block["previous_block_hash"].clone()).map_err(de::Error::custom)?,
+                    serde_json::from_value(block["header"].clone()).map_err(de::Error::custom)?,
+                    serde_json::from_value(block["transactions"].clone()).map_err(de::Error::custom)?,
+                )
+                .map_err(de::Error::custom)?;
+
+                // Ensure the block hash matches.
+                match block_hash == block.hash() {
+                    true => Ok(block),
+                    false => {
+                        Err(anyhow!("Mismatching block hash, possible data corruption")).map_err(de::Error::custom)
+                    }
+                }
+            }
+            false => FromBytesDeserializer::<Self>::deserialize_with_size_encoding(deserializer, "block"),
+        }
     }
 }
 
@@ -356,8 +426,11 @@ impl<N: Network> ToBytes for Block<N> {
 mod tests {
     use super::*;
     use crate::{testnet2::Testnet2, Account, AccountScheme};
+    use snarkvm_utilities::UniformRand;
 
     use rand::{thread_rng, Rng};
+    use rayon::iter::{IntoParallelIterator, ParallelIterator};
+    use std::str::FromStr;
 
     const ITERATIONS: usize = 1000;
 
@@ -374,8 +447,8 @@ mod tests {
     fn test_block_rewards() {
         let rng = &mut thread_rng();
 
-        let first_halving: u32 = 3 * 365 * 24 * 180;
-        let second_halving: u32 = first_halving * 2;
+        let first_halving: u32 = 3 * 365 * 24 * 180; // 4,730,400
+        let second_halving: u32 = first_halving * 2; // 9,460,800
 
         // Genesis
 
@@ -386,34 +459,163 @@ mod tests {
 
         // Before block halving
 
-        let mut block_reward: i64 = 150 * 1_000_000;
+        let mut block_reward: i64 = 100 * 1_000_000;
 
         for _ in 0..ITERATIONS {
-            let block_height: u32 = rng.gen_range(0..first_halving);
+            let block_height: u32 = rng.gen_range(1..first_halving);
             assert_eq!(Block::<Testnet2>::block_reward(block_height).0, block_reward);
         }
+        assert_eq!(Block::<Testnet2>::block_reward(first_halving).0, block_reward);
 
         // First block halving
 
         block_reward /= 2;
 
-        assert_eq!(Block::<Testnet2>::block_reward(first_halving).0, block_reward);
-
+        assert_eq!(Block::<Testnet2>::block_reward(first_halving + 1).0, block_reward);
         for _ in 0..ITERATIONS {
             let block_num: u32 = rng.gen_range((first_halving + 1)..second_halving);
             assert_eq!(Block::<Testnet2>::block_reward(block_num).0, block_reward);
         }
+        assert_eq!(Block::<Testnet2>::block_reward(second_halving).0, block_reward);
 
         // Second and final block halving
 
         block_reward /= 2;
 
-        assert_eq!(Block::<Testnet2>::block_reward(second_halving).0, block_reward);
-        assert_eq!(Block::<Testnet2>::block_reward(u32::MAX).0, block_reward);
-
+        assert_eq!(Block::<Testnet2>::block_reward(second_halving + 1).0, block_reward);
         for _ in 0..ITERATIONS {
             let block_num: u32 = rng.gen_range(second_halving..u32::MAX);
             assert_eq!(Block::<Testnet2>::block_reward(block_num).0, block_reward);
         }
+        assert_eq!(Block::<Testnet2>::block_reward(u32::MAX).0, block_reward);
+    }
+
+    #[test]
+    fn test_token_supply() {
+        let first_halving: u32 = 3 * 365 * 24 * 180; // 4,730,400
+        let supply_at_first_halving = 1_473_040_000;
+
+        let second_halving: u32 = first_halving * 2; // 9,460,800
+        let supply_at_second_halving = 1_709_560_000;
+
+        assert_eq!(
+            Block::<Testnet2>::block_reward(0),
+            AleoAmount::from_i64(Testnet2::ALEO_STARTING_SUPPLY_IN_CREDITS * AleoAmount::ONE_CREDIT.0)
+        );
+
+        let mut supply = AleoAmount::ZERO;
+
+        // Phase 1 - 100 credits per block.
+        let phase_1_sum = AleoAmount::from_i64(
+            (0..=first_halving)
+                .into_par_iter()
+                .map(|i| Block::<Testnet2>::block_reward(i).0)
+                .sum::<i64>(),
+        );
+
+        supply = supply.add(phase_1_sum);
+
+        assert_eq!(
+            supply,
+            AleoAmount::from_i64(supply_at_first_halving * AleoAmount::ONE_CREDIT.0)
+        );
+
+        // Phase 2 - 50 credits per block.
+        let phase_2_sum = AleoAmount::from_i64(
+            ((first_halving + 1)..=second_halving)
+                .into_par_iter()
+                .map(|i| Block::<Testnet2>::block_reward(i).0)
+                .sum::<i64>(),
+        );
+
+        supply = supply.add(phase_2_sum);
+
+        assert_eq!(
+            supply,
+            AleoAmount::from_i64(supply_at_second_halving * AleoAmount::ONE_CREDIT.0)
+        );
+    }
+
+    #[test]
+    fn test_block_serde_json() {
+        let rng = &mut thread_rng();
+        let account = Account::<Testnet2>::new(rng);
+        let expected_block = Block::<Testnet2>::new_genesis(account.address(), rng).unwrap();
+
+        // Serialize
+        let expected_string = expected_block.to_string();
+        let candidate_string = serde_json::to_string(&expected_block).unwrap();
+        assert_eq!(3964, candidate_string.len(), "Update me if serialization has changed");
+        assert_eq!(expected_string, candidate_string);
+
+        // Deserialize
+        assert_eq!(expected_block, Block::<Testnet2>::from_str(&candidate_string).unwrap());
+        assert_eq!(expected_block, serde_json::from_str(&candidate_string).unwrap());
+    }
+
+    #[test]
+    fn test_block_bincode() {
+        let rng = &mut thread_rng();
+        let account = Account::<Testnet2>::new(rng);
+        let expected_block = Block::<Testnet2>::new_genesis(account.address(), rng).unwrap();
+
+        // Serialize
+        let expected_bytes = expected_block.to_bytes_le().unwrap();
+        let candidate_bytes = bincode::serialize(&expected_block).unwrap();
+        assert_eq!(2014, expected_bytes.len(), "Update me if serialization has changed");
+        // TODO (howardwu): Serialization - Handle the inconsistency between ToBytes and Serialize (off by a length encoding).
+        assert_eq!(&expected_bytes[..], &candidate_bytes[8..]);
+
+        // Deserialize
+        assert_eq!(expected_block, Block::<Testnet2>::read_le(&expected_bytes[..]).unwrap());
+        assert_eq!(expected_block, bincode::deserialize(&candidate_bytes[..]).unwrap());
+    }
+
+    /// A bech32-encoded representation of the block hash.
+    #[test]
+    fn test_block_hash_serde_json() {
+        let rng = &mut thread_rng();
+        let expected_block_hash: <Testnet2 as Network>::BlockHash = UniformRand::rand(rng);
+
+        // Serialize
+        let expected_string = &expected_block_hash.to_string();
+        let candidate_string = serde_json::to_string(&expected_block_hash).unwrap();
+        let sanitized_candidate_string = serde_json::Value::from_str(&candidate_string).unwrap();
+        let sanitized_candidate_string = sanitized_candidate_string.as_str().unwrap();
+        println!("{} == {}", expected_string, sanitized_candidate_string);
+        assert_eq!(
+            61,
+            sanitized_candidate_string.len(),
+            "Update me if serialization has changed"
+        );
+        assert_eq!(expected_string, sanitized_candidate_string);
+
+        // Deserialize
+        assert_eq!(
+            expected_block_hash,
+            <Testnet2 as Network>::BlockHash::from_str(&expected_string).unwrap()
+        );
+        assert_eq!(expected_block_hash, serde_json::from_str(&candidate_string).unwrap());
+    }
+
+    #[test]
+    fn test_block_hash_bincode() {
+        let rng = &mut thread_rng();
+        let expected_block_hash: <Testnet2 as Network>::BlockHash = UniformRand::rand(rng);
+
+        // Serialize
+        let expected_bytes = expected_block_hash.to_bytes_le().unwrap();
+        assert_eq!(32, expected_bytes.len(), "Update me if serialization has changed");
+        assert_eq!(
+            &expected_bytes[..],
+            &bincode::serialize(&expected_block_hash).unwrap()[..]
+        );
+
+        // Deserialize
+        assert_eq!(
+            expected_block_hash,
+            <Testnet2 as Network>::BlockHash::read_le(&expected_bytes[..]).unwrap()
+        );
+        assert_eq!(expected_block_hash, bincode::deserialize(&expected_bytes[..]).unwrap());
     }
 }

@@ -192,7 +192,7 @@ pub mod test {
     type PC = SonicKZG10<Bls12_377>;
     type PCGadget = SonicKZG10Gadget<Bls12_377, BW6_761, Bls12_377PairingGadget>;
 
-    type FS = FiatShamirAlgebraicSpongeRng<Fr, Fq, PoseidonSponge<Fq>>;
+    type FS = FiatShamirAlgebraicSpongeRng<Fr, Fq, PoseidonSponge<Fq, 6, 1>>;
 
     type TestSNARK = MarlinSNARK<Fr, Fq, PC, FS, MarlinRecursiveMode, Vec<Fr>>;
     type TestSNARKGadget = MarlinVerificationGadget<Fr, Fq, PC, PCGadget>;
@@ -279,6 +279,7 @@ pub mod test {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     fn marlin_verifier_num_constraints_test() {
         let mut rng = test_rng();
 
@@ -355,8 +356,8 @@ pub mod test {
 
         const INPUT_GADGET_CONSTRAINTS: usize = 259;
         const PROOF_GADGET_CONSTRAINTS: usize = 48;
-        const VK_GADGET_CONSTRAINTS: usize = 32;
-        const VERIFIER_GADGET_CONSTRAINTS: usize = 132743;
+        const VK_GADGET_CONSTRAINTS: usize = 188;
+        const VERIFIER_GADGET_CONSTRAINTS: usize = 130543;
 
         assert_eq!(input_gadget_constraints, INPUT_GADGET_CONSTRAINTS);
         assert_eq!(proof_gadget_constraints, PROOF_GADGET_CONSTRAINTS);
@@ -381,7 +382,7 @@ pub mod multiple_input_tests {
             FiatShamirAlgebraicSpongeRng,
             FiatShamirAlgebraicSpongeRngVar,
             PoseidonSponge,
-            PoseidonSpongeVar,
+            PoseidonSpongeGadget as PoseidonSpongeVar,
         },
         marlin::MarlinRecursiveMode,
         FiatShamirRngVar,
@@ -521,8 +522,8 @@ pub mod multiple_input_tests {
     type PC = SonicKZG10<Bls12_377>;
     type PCGadget = SonicKZG10Gadget<Bls12_377, BW6_761, Bls12_377PairingGadget>;
 
-    type FS = FiatShamirAlgebraicSpongeRng<Fr, Fq, PoseidonSponge<Fq>>;
-    type FSG = FiatShamirAlgebraicSpongeRngVar<Fr, Fq, PoseidonSponge<Fq>, PoseidonSpongeVar<Fq>>;
+    type FS = FiatShamirAlgebraicSpongeRng<Fr, Fq, PoseidonSponge<Fq, 6, 1>>;
+    type FSG = FiatShamirAlgebraicSpongeRngVar<Fr, Fq, PoseidonSponge<Fq, 6, 1>, PoseidonSpongeVar<Fq, 6, 1>>;
 
     type TestSNARK = MarlinSNARK<Fr, Fq, PC, FS, MarlinRecursiveMode, Vec<Fr>>;
     type TestSNARKGadget = MarlinVerificationGadget<Fr, Fq, PC, PCGadget>;

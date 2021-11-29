@@ -24,8 +24,8 @@ use std::sync::Arc;
 #[derive(Derivative)]
 #[derivative(Clone(bound = "N: Network"), Debug(bound = "N: Network"))]
 pub struct VirtualMachine<N: Network> {
-    /// The ledger tree used to prove inclusion of ledger-consumed records.
-    ledger: LedgerTree<N>,
+    /// The root of the ledger tree used to prove inclusion of ledger-consumed records.
+    ledger_root: N::LedgerRoot,
     /// The local transitions tree.
     local_transitions: Transitions<N>,
     /// The current list of transitions.
@@ -36,9 +36,9 @@ pub struct VirtualMachine<N: Network> {
 
 impl<N: Network> VirtualMachine<N> {
     /// Initializes a new instance of the virtual machine, with the given request.
-    pub fn new(ledger: LedgerTree<N>) -> Result<Self> {
+    pub fn new(ledger_root: N::LedgerRoot) -> Result<Self> {
         Ok(Self {
-            ledger,
+            ledger_root,
             local_transitions: Transitions::new()?,
             transitions: Default::default(),
             events: Default::default(),
@@ -48,6 +48,24 @@ impl<N: Network> VirtualMachine<N> {
     /// Returns the local proof for a given commitment.
     pub fn to_local_proof(&self, commitment: N::Commitment) -> Result<LocalProof<N>> {
         self.local_transitions.to_local_proof(commitment)
+    }
+
+    /// Adds the given event into the virtual machine.
+    pub fn add_event(mut self, event: Event<N>) -> Result<Self> {
+        match self.events.len() < N::NUM_EVENTS as usize {
+            true => self.events.push(event),
+            false => return Err(anyhow!("Virtual machine exceeded maximum number of events")),
+        };
+        Ok(self)
+    }
+
+    /// Adds the given events into the virtual machine.
+    pub fn add_events(mut self, events: &Vec<Event<N>>) -> Result<Self> {
+        match self.events.len() + events.len() < N::NUM_EVENTS as usize {
+            true => self.events.extend_from_slice(events),
+            false => return Err(anyhow!("Virtual machine exceeded maximum number of events")),
+        };
+        Ok(self)
     }
 
     /// Returns the number of transitions in the virtual machine.
@@ -74,12 +92,14 @@ impl<N: Network> VirtualMachine<N> {
                 &function_id,
                 &function_type,
                 &function_inputs,
+                false,
                 rng,
             )?,
         };
 
         let program_id = request.to_program_id()?;
         let transition_id = response.transition_id();
+        let value_balance = response.value_balance();
 
         // Compute the noop execution, for now.
         let execution = Execution {
@@ -95,12 +115,13 @@ impl<N: Network> VirtualMachine<N> {
         // Compute the inner circuit proof, and verify that the inner proof passes.
         let inner_public = InnerPublicVariables::new(
             transition_id,
-            self.ledger.root(),
+            value_balance,
+            self.ledger_root,
             self.local_transitions.root(),
             Some(program_id),
         );
         let inner_private = InnerPrivateVariables::new(request, &response)?;
-        let inner_circuit = InnerCircuit::<N>::new(inner_public.clone(), inner_private);
+        let inner_circuit = InnerCircuit::<N>::new(inner_public, inner_private);
         let inner_proof = N::InnerSNARK::prove(N::inner_proving_key(), &inner_circuit, rng)?;
 
         assert!(N::InnerSNARK::verify(
@@ -110,13 +131,8 @@ impl<N: Network> VirtualMachine<N> {
         )?);
 
         // Construct the outer circuit public and private variables.
-        let outer_public = OuterPublicVariables::new(
-            transition_id,
-            self.ledger.root(),
-            self.local_transitions.root(),
-            *N::inner_circuit_id(),
-        );
-        let outer_private = OuterPrivateVariables::new(N::inner_verifying_key().clone(), inner_proof, execution);
+        let outer_public = OuterPublicVariables::new(inner_public, N::inner_circuit_id());
+        let outer_private = OuterPrivateVariables::new(N::inner_verifying_key().clone(), inner_proof.into(), execution);
         let outer_circuit = OuterCircuit::<N>::new(outer_public.clone(), outer_private);
         let outer_proof = N::OuterSNARK::prove(N::outer_proving_key(), &outer_circuit, rng)?;
 
@@ -127,12 +143,12 @@ impl<N: Network> VirtualMachine<N> {
         )?);
 
         // Construct the transition.
-        let transition = Transition::<N>::new(request, &response, outer_proof)?;
+        let transition = Transition::<N>::new(request, &response, outer_proof.into())?;
 
         // Update the state of the virtual machine.
         self.local_transitions.add(&transition)?;
         self.transitions.push(transition);
-        self.events.extend_from_slice(response.events());
+        self = self.add_events(response.events())?;
 
         Ok(self)
     }
@@ -141,7 +157,7 @@ impl<N: Network> VirtualMachine<N> {
     pub fn finalize(&self) -> Result<Transaction<N>> {
         Transaction::from(
             *N::inner_circuit_id(),
-            self.ledger.root(),
+            self.ledger_root,
             self.transitions.clone(),
             self.events.clone(),
         )
@@ -161,7 +177,7 @@ impl<N: Network> VirtualMachine<N> {
     ) -> Result<Response<N>> {
         ResponseBuilder::new()
             .add_request(request.clone())
-            .add_output(Output::new(recipient, amount, Default::default(), None)?)
+            .add_output(Output::new(recipient, amount, Default::default(), None, false)?)
             .build(rng)
     }
 
@@ -192,8 +208,8 @@ impl<N: Network> VirtualMachine<N> {
 
         ResponseBuilder::new()
             .add_request(request.clone())
-            .add_output(Output::new(caller, caller_balance, Default::default(), None)?)
-            .add_output(Output::new(recipient, amount, Default::default(), None)?)
+            .add_output(Output::new(caller, caller_balance, Default::default(), None, false)?)
+            .add_output(Output::new(recipient, amount, Default::default(), None, false)?)
             .build(rng)
     }
 
@@ -205,6 +221,7 @@ impl<N: Network> VirtualMachine<N> {
         function_id: &N::FunctionID,
         _function_type: &FunctionType,
         function_inputs: &FunctionInputs<N>,
+        public_output: bool,
         rng: &mut R,
     ) -> Result<Response<N>> {
         // TODO (raychu86): Do function type checks.
@@ -240,6 +257,7 @@ impl<N: Network> VirtualMachine<N> {
                 function_inputs.amount,
                 function_inputs.record_payload.clone(),
                 Some(program_id),
+                public_output,
             )?);
 
         // Add the change address if the balance is not zero.
@@ -249,7 +267,13 @@ impl<N: Network> VirtualMachine<N> {
                 caller_balance,
                 Default::default(),
                 None,
+                false,
             )?)
+        }
+
+        // Add the operation event to the response builder.
+        if request.is_public() {
+            response_builder = response_builder.add_event(Event::Operation(request.operation().clone()));
         }
 
         response_builder.build(rng)
@@ -265,6 +289,8 @@ impl<N: Network> VirtualMachine<N> {
         function_path: &MerklePath<<N as Network>::ProgramIDParameters>,
         function_verifying_key: <<N as Network>::ProgramSNARK as SNARK>::VerifyingKey,
         private_variables: &dyn ProgramPrivateVariables<N>,
+        public_output: bool,
+        custom_events: Vec<Vec<u8>>,
         rng: &mut R,
     ) -> Result<(Self, Response<N>)> {
         // Ensure the request is valid.
@@ -275,23 +301,31 @@ impl<N: Network> VirtualMachine<N> {
         // Compute the operation.
         let operation = request.operation().clone();
         let response = match operation {
-            Operation::Evaluate(function_id, function_type, function_inputs) => {
-                self.evaluate(request, program_id, &function_id, &function_type, &function_inputs, rng)?
-            }
+            Operation::Evaluate(function_id, function_type, function_inputs) => self.evaluate(
+                request,
+                program_id,
+                &function_id,
+                &function_type,
+                &function_inputs,
+                public_output,
+                rng,
+            )?,
             _ => return Err(anyhow!("Invalid Operation")),
         };
 
         let transition_id = response.transition_id();
+        let value_balance = response.value_balance();
 
         // Compute the inner circuit proof, and verify that the inner proof passes.
         let inner_public = InnerPublicVariables::new(
             transition_id,
-            self.ledger.root(),
+            value_balance,
+            self.ledger_root,
             self.local_transitions.root(),
             Some(program_id),
         );
         let inner_private = InnerPrivateVariables::new(request, &response)?;
-        let inner_circuit = InnerCircuit::<N>::new(inner_public.clone(), inner_private.clone());
+        let inner_circuit = InnerCircuit::<N>::new(inner_public, inner_private.clone());
         let inner_proof = N::InnerSNARK::prove(N::inner_proving_key(), &inner_circuit, rng)?;
 
         assert!(N::InnerSNARK::verify(
@@ -315,13 +349,8 @@ impl<N: Network> VirtualMachine<N> {
         };
 
         // Construct the outer circuit public and private variables.
-        let outer_public = OuterPublicVariables::new(
-            transition_id,
-            self.ledger.root(),
-            self.local_transitions.root(),
-            *N::inner_circuit_id(),
-        );
-        let outer_private = OuterPrivateVariables::new(N::inner_verifying_key().clone(), inner_proof, execution);
+        let outer_public = OuterPublicVariables::new(inner_public, N::inner_circuit_id());
+        let outer_private = OuterPrivateVariables::new(N::inner_verifying_key().clone(), inner_proof.into(), execution);
         let outer_circuit = OuterCircuit::<N>::new(outer_public.clone(), outer_private.clone());
         let outer_proof = N::OuterSNARK::prove(N::outer_proving_key(), &outer_circuit, rng)?;
 
@@ -332,12 +361,18 @@ impl<N: Network> VirtualMachine<N> {
         )?);
 
         // Construct the transition.
-        let transition = Transition::<N>::new(&request, &response, outer_proof)?;
+        let transition = Transition::<N>::new(&request, &response, outer_proof.into())?;
 
         // Update the state of the virtual machine.
         self.local_transitions.add(&transition)?;
         self.transitions.push(transition);
-        self.events.extend_from_slice(response.events());
+
+        // Add events to the virtual machine.
+        self = self.add_events(response.events())?;
+        for event in custom_events {
+            let custom_event = Event::Custom(event);
+            self = self.add_event(custom_event)?;
+        }
 
         Ok((self, response))
     }
