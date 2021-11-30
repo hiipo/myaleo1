@@ -18,7 +18,7 @@ use std::fmt;
 
 use crate::{ir, Value};
 
-use anyhow::*;
+use anyhow::{anyhow, Result};
 use num_enum::TryFromPrimitive;
 
 use super::{decode_control_bool, decode_control_u32};

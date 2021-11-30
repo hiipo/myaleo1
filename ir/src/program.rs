@@ -20,7 +20,7 @@ use prost::Message;
 
 use crate::{ir, Function, Header, Instruction, MaskData, RepeatData};
 
-use anyhow::*;
+use anyhow::{anyhow, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {

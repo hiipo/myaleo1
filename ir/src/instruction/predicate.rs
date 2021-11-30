@@ -18,7 +18,7 @@ use std::fmt;
 
 use crate::{ir, Value};
 
-use anyhow::*;
+use anyhow::{anyhow, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PredicateData<const N: usize> {

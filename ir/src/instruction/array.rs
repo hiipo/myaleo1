@@ -16,7 +16,7 @@
 
 use std::fmt;
 
-use anyhow::*;
+use anyhow::{anyhow, Result};
 
 use crate::{ir, Value};
 
