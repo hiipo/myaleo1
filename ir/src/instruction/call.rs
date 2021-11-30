@@ -19,10 +19,11 @@ use std::fmt;
 use crate::{ir, Value};
 
 use anyhow::{anyhow, Result};
+use serde::Serialize;
 
 use super::{decode_control_string, decode_control_u32};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CallData {
     pub destination: u32,
     pub index: u32, // index of function (of all defined functions, not instruction index)
@@ -72,7 +73,7 @@ impl CallData {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CallCoreData {
     pub destination: u32,
     pub identifier: String, // name of core function
@@ -124,7 +125,7 @@ impl CallCoreData {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CallEntryPointData {
     pub destination: u32,
     pub index: u32, // index of function (of all defined functions, not instruction index)

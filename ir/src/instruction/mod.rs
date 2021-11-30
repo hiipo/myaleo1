@@ -34,10 +34,11 @@ mod code;
 
 use anyhow::{anyhow, Result};
 use num_enum::TryFromPrimitive;
+use serde::Serialize;
 
 use crate::ir;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum Instruction {
     // Binary
     Add(BinaryData),
