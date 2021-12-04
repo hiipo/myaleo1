@@ -67,7 +67,7 @@ impl<N: Network> Ledger<N> {
     }
 
     /// Returns the latest cumulative weight.
-    pub fn latest_cumulative_weight(&self) -> Result<u64> {
+    pub fn latest_cumulative_weight(&self) -> Result<u128> {
         self.canon_blocks.latest_cumulative_weight()
     }
 
@@ -149,9 +149,10 @@ impl<N: Network> Ledger<N> {
     pub fn mine_next_block<R: Rng + CryptoRng>(
         &mut self,
         recipient: Address<N>,
+        is_public: bool,
         terminator: &AtomicBool,
         rng: &mut R,
-    ) -> Result<()> {
+    ) -> Result<Record<N>> {
         // Prepare the new block.
         let previous_block_hash = self.latest_block_hash();
         let block_height = self.latest_block_height() + 1;
@@ -163,11 +164,12 @@ impl<N: Network> Ledger<N> {
         let block_timestamp = Utc::now().timestamp();
         let difficulty_target =
             Blocks::<N>::compute_difficulty_target(previous_timestamp, previous_difficulty_target, block_timestamp);
-        let cumulative_weight = previous_cumulative_weight.saturating_add(u64::MAX - difficulty_target);
+        let cumulative_weight = previous_cumulative_weight.saturating_add((u64::MAX / difficulty_target) as u128);
 
         // Construct the new block transactions.
         let amount = Block::<N>::block_reward(block_height);
-        let coinbase_transaction = Transaction::<N>::new_coinbase(recipient, amount, rng)?;
+        let (coinbase_transaction, coinbase_record) =
+            Transaction::<N>::new_coinbase(recipient, amount, is_public, rng)?;
         let transactions = Transactions::from(&[vec![coinbase_transaction], self.memory_pool.transactions()].concat())?;
 
         // Retrieve the current ledger root.
@@ -192,7 +194,7 @@ impl<N: Network> Ledger<N> {
         // On success, clear the memory pool of its transactions.
         self.memory_pool.clear_all_transactions();
 
-        Ok(())
+        Ok(coinbase_record)
     }
 
     /// Returns the ledger tree.
@@ -233,7 +235,7 @@ mod tests {
 
             assert_eq!(0, ledger.latest_block_height());
             ledger
-                .mine_next_block(recipient.address(), &AtomicBool::new(false), rng)
+                .mine_next_block(recipient.address(), true, &AtomicBool::new(false), rng)
                 .unwrap();
             assert_eq!(1, ledger.latest_block_height());
         }
@@ -243,7 +245,7 @@ mod tests {
 
             assert_eq!(0, ledger.latest_block_height());
             ledger
-                .mine_next_block(recipient.address(), &AtomicBool::new(false), rng)
+                .mine_next_block(recipient.address(), true, &AtomicBool::new(false), rng)
                 .unwrap();
             assert_eq!(1, ledger.latest_block_height());
         }

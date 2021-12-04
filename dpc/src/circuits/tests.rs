@@ -29,7 +29,7 @@ fn dpc_execute_circuits_test<N: Network>(expected_inner_num_constraints: usize, 
     let request = Request::new_coinbase(recipient.address(), amount, false, rng).unwrap();
     let response = ResponseBuilder::new()
         .add_request(request.clone())
-        .add_output(Output::new(recipient.address(), amount, Default::default(), None, false).unwrap())
+        .add_output(Output::new(recipient.address(), amount, Default::default(), None).unwrap())
         .build(rng)
         .unwrap();
 
@@ -185,7 +185,7 @@ mod testnet1 {
 
     #[test]
     fn test_dpc_execute_circuits() {
-        dpc_execute_circuits_test::<Testnet1>(251484, 152379);
+        dpc_execute_circuits_test::<Testnet1>(253822, 152307);
     }
 }
 
@@ -195,6 +195,6 @@ mod testnet2 {
 
     #[test]
     fn test_dpc_execute_circuits() {
-        dpc_execute_circuits_test::<Testnet2>(251484, 242451);
+        dpc_execute_circuits_test::<Testnet2>(253822, 242379);
     }
 }

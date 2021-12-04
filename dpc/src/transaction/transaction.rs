@@ -64,26 +64,27 @@ pub struct Transaction<N: Network> {
     ledger_root: N::LedgerRoot,
     /// The state transition.
     transitions: Vec<Transition<N>>,
-    /// The events emitted from this transaction.
-    events: Vec<Event<N>>,
 }
 
 impl<N: Network> Transaction<N> {
     /// Initializes a new transaction from a request.
     #[inline]
     pub fn new<R: Rng + CryptoRng>(ledger: LedgerTree<N>, request: &Request<N>, rng: &mut R) -> Result<Self> {
-        VirtualMachine::<N>::new(ledger.root())?
-            .execute(request, rng)?
-            .finalize()
+        let (vm, _) = VirtualMachine::<N>::new(ledger.root())?.execute(request, rng)?;
+        vm.finalize()
     }
 
     /// Initializes a new coinbase transaction.
     #[inline]
-    pub fn new_coinbase<R: Rng + CryptoRng>(recipient: Address<N>, amount: AleoAmount, rng: &mut R) -> Result<Self> {
-        let request = Request::new_coinbase(recipient, amount, false, rng)?;
-        VirtualMachine::<N>::new(LedgerTree::<N>::new()?.root())?
-            .execute(&request, rng)?
-            .finalize()
+    pub fn new_coinbase<R: Rng + CryptoRng>(
+        recipient: Address<N>,
+        amount: AleoAmount,
+        is_public: bool,
+        rng: &mut R,
+    ) -> Result<(Self, Record<N>)> {
+        let request = Request::new_coinbase(recipient, amount, is_public, rng)?;
+        let (vm, response) = VirtualMachine::<N>::new(LedgerTree::<N>::new()?.root())?.execute(&request, rng)?;
+        Ok((vm.finalize()?, response.records()[0].clone()))
     }
 
     /// Initializes an instance of `Transaction` from the given inputs.
@@ -92,7 +93,6 @@ impl<N: Network> Transaction<N> {
         inner_circuit_id: N::InnerCircuitID,
         ledger_root: N::LedgerRoot,
         transitions: Vec<Transition<N>>,
-        events: Vec<Event<N>>,
     ) -> Result<Self> {
         let transaction_id = Self::compute_transaction_id(&transitions)?;
 
@@ -101,7 +101,6 @@ impl<N: Network> Transaction<N> {
             inner_circuit_id,
             ledger_root,
             transitions,
-            events,
         };
 
         match transaction.is_valid() {
@@ -123,7 +122,7 @@ impl<N: Network> Transaction<N> {
         }
 
         // Ensure the number of events is less than `N::NUM_EVENTS`.
-        if self.events.len() > N::NUM_EVENTS as usize {
+        if self.events().count() > num_transitions * N::NUM_EVENTS as usize {
             eprintln!("Transaction contains an invalid number of events");
             return false;
         }
@@ -285,16 +284,16 @@ impl<N: Network> Transaction<N> {
             .fold(AleoAmount::ZERO, |a, b| a.add(*b))
     }
 
+    /// Returns the events.
+    #[inline]
+    pub fn events(&self) -> impl Iterator<Item = &Event<N>> + fmt::Debug + '_ {
+        self.transitions.iter().flat_map(Transition::events)
+    }
+
     /// Returns a reference to the state transitions.
     #[inline]
     pub fn transitions(&self) -> &Vec<Transition<N>> {
         &self.transitions
-    }
-
-    /// Returns a reference to the events.
-    #[inline]
-    pub fn events(&self) -> &Vec<Event<N>> {
-        &self.events
     }
 
     /// Returns records from the transaction belonging to the given account view key.
@@ -303,9 +302,16 @@ impl<N: Network> Transaction<N> {
         self.transitions
             .iter()
             .flat_map(Transition::ciphertexts)
-            .filter_map(|c| Record::from_account_view_key(account_view_key, c).ok())
+            .filter(|ciphertext| ciphertext.is_owner(account_view_key))
+            .filter_map(|ciphertext| Record::from_account_view_key(account_view_key, ciphertext).ok())
             .filter(|record| !record.is_dummy())
             .collect()
+    }
+
+    /// Returns the decrypted records using record view key events, if they exist.
+    #[inline]
+    pub fn to_records(&self) -> impl Iterator<Item = Record<N>> + fmt::Debug + '_ {
+        self.transitions.iter().flat_map(Transition::to_records)
     }
 
     /// Returns the local proof for a given commitment.
@@ -343,16 +349,7 @@ impl<N: Network> FromBytes for Transaction<N> {
             transitions.push(FromBytes::read_le(&mut reader)?);
         }
 
-        let num_events: u16 = FromBytes::read_le(&mut reader)?;
-        let mut events = Vec::with_capacity(num_events as usize);
-        for _ in 0..num_events {
-            events.push(FromBytes::read_le(&mut reader)?);
-        }
-
-        Ok(
-            Self::from(inner_circuit_id, ledger_root, transitions, events)
-                .expect("Failed to deserialize a transaction"),
-        )
+        Ok(Self::from(inner_circuit_id, ledger_root, transitions).expect("Failed to deserialize a transaction"))
     }
 }
 
@@ -362,9 +359,7 @@ impl<N: Network> ToBytes for Transaction<N> {
         self.inner_circuit_id.write_le(&mut writer)?;
         self.ledger_root.write_le(&mut writer)?;
         (self.transitions.len() as u16).write_le(&mut writer)?;
-        self.transitions.write_le(&mut writer)?;
-        (self.events.len() as u16).write_le(&mut writer)?;
-        self.events.write_le(&mut writer)
+        self.transitions.write_le(&mut writer)
     }
 }
 
@@ -395,7 +390,6 @@ impl<N: Network> Serialize for Transaction<N> {
                 transaction.serialize_field("inner_circuit_id", &self.inner_circuit_id)?;
                 transaction.serialize_field("ledger_root", &self.ledger_root)?;
                 transaction.serialize_field("transitions", &self.transitions)?;
-                transaction.serialize_field("events", &self.events)?;
                 transaction.end()
             }
             false => ToBytesSerializer::serialize_with_size_encoding(self, serializer),
@@ -416,7 +410,6 @@ impl<'de, N: Network> Deserialize<'de> for Transaction<N> {
                     serde_json::from_value(transaction["inner_circuit_id"].clone()).map_err(de::Error::custom)?,
                     serde_json::from_value(transaction["ledger_root"].clone()).map_err(de::Error::custom)?,
                     serde_json::from_value(transaction["transitions"].clone()).map_err(de::Error::custom)?,
-                    serde_json::from_value(transaction["events"].clone()).map_err(de::Error::custom)?,
                 )
                 .map_err(de::Error::custom)?;
 
@@ -455,22 +448,34 @@ mod tests {
         let rng = &mut thread_rng();
         let account = Account::<Testnet2>::new(rng);
 
-        // Craft the expected coinbase record.
-        let expected_record = Record::new(
-            account.address(),
-            AleoAmount::from_i64(1234),
-            Default::default(),
-            *Testnet2::noop_program_id(),
-            rng,
-        )
-        .unwrap();
-
         // Craft a transaction with 1 coinbase record.
-        let transaction = Transaction::new_coinbase(account.address(), AleoAmount(1234), rng).unwrap();
+        let (transaction, expected_record) =
+            Transaction::new_coinbase(account.address(), AleoAmount(1234), true, rng).unwrap();
         let decrypted_records = transaction.to_decrypted_records(&account.view_key());
         assert_eq!(decrypted_records.len(), 1); // Excludes dummy records upon decryption.
 
         let candidate_record = decrypted_records.first().unwrap();
+        assert_eq!(&expected_record, candidate_record);
+        assert_eq!(expected_record.owner(), candidate_record.owner());
+        assert_eq!(expected_record.value(), candidate_record.value());
+        assert_eq!(expected_record.payload(), candidate_record.payload());
+        assert_eq!(expected_record.program_id(), candidate_record.program_id());
+    }
+
+    #[test]
+    fn test_public_coinbase_record() {
+        let rng = &mut thread_rng();
+        let account = Account::<Testnet2>::new(rng);
+
+        // Craft a transaction with 1 coinbase record.
+        let (transaction, expected_record) =
+            Transaction::new_coinbase(account.address(), AleoAmount(1234), true, rng).unwrap();
+
+        let public_records = transaction.to_records().collect::<Vec<_>>();
+        assert_eq!(public_records.len(), 1); // Excludes dummy records upon decryption.
+
+        let candidate_record = public_records.first().unwrap();
+        assert_eq!(&expected_record, candidate_record);
         assert_eq!(expected_record.owner(), candidate_record.owner());
         assert_eq!(expected_record.value(), candidate_record.value());
         assert_eq!(expected_record.payload(), candidate_record.payload());
@@ -483,13 +488,13 @@ mod tests {
         let account = Account::<Testnet2>::new(rng);
 
         // Craft a transaction with 1 coinbase record.
-        let expected_transaction =
-            Transaction::<Testnet2>::new_coinbase(account.address(), AleoAmount(1234), rng).unwrap();
+        let (expected_transaction, _) =
+            Transaction::<Testnet2>::new_coinbase(account.address(), AleoAmount(1234), true, rng).unwrap();
 
         // Serialize
         let expected_string = expected_transaction.to_string();
         let candidate_string = serde_json::to_string(&expected_transaction).unwrap();
-        assert_eq!(2142, candidate_string.len(), "Update me if serialization has changed");
+        assert_eq!(2347, candidate_string.len(), "Update me if serialization has changed");
         assert_eq!(expected_string, candidate_string);
 
         // Deserialize
@@ -503,13 +508,13 @@ mod tests {
         let account = Account::<Testnet2>::new(rng);
 
         // Craft a transaction with 1 coinbase record.
-        let expected_transaction =
-            Transaction::<Testnet2>::new_coinbase(account.address(), AleoAmount(1234), rng).unwrap();
+        let (expected_transaction, _) =
+            Transaction::<Testnet2>::new_coinbase(account.address(), AleoAmount(1234), true, rng).unwrap();
 
         // Serialize
         let expected_bytes = expected_transaction.to_bytes_le().unwrap();
         let candidate_bytes = bincode::serialize(&expected_transaction).unwrap();
-        assert_eq!(1053, expected_bytes.len(), "Update me if serialization has changed");
+        assert_eq!(1121, expected_bytes.len(), "Update me if serialization has changed");
         // TODO (howardwu): Serialization - Handle the inconsistency between ToBytes and Serialize (off by a length encoding).
         assert_eq!(&expected_bytes[..], &candidate_bytes[8..]);
 
