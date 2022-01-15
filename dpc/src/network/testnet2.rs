@@ -166,7 +166,8 @@ impl Network for Testnet2 {
     type ProgramBaseField = <Self::ProgramCurveParameters as ModelParameters>::BaseField;
     type ProgramScalarField = <Self::ProgramCurveParameters as ModelParameters>::ScalarField;
 
-    type InnerSNARK = Groth16<Self::InnerCurve, InnerPublicVariables<Testnet2>>;
+    // type InnerSNARK = Groth16<Self::InnerCurve, InnerPublicVariables<Testnet2>>;
+    type InnerSNARK = MarlinSNARK<Self::InnerScalarField, Self::OuterScalarField, SonicKZG10<Self::InnerCurve>, FiatShamirChaChaRng<Self::InnerScalarField, Self::OuterScalarField, Blake2s>, MarlinPoswMode, InnerPublicVariables<Testnet2>>;
     type InnerProof = AleoObject<<Self::InnerSNARK as SNARK>::Proof, { Self::INNER_PROOF_PREFIX }, { Self::INNER_PROOF_SIZE_IN_BYTES }>;
 
     type ProgramSNARK = MarlinSNARK<Self::InnerScalarField, Self::OuterScalarField, SonicKZG10<Self::InnerCurve>, FiatShamirAlgebraicSpongeRng<Self::InnerScalarField, Self::OuterScalarField, PoseidonSponge<Self::OuterScalarField, 6, 1>>, MarlinTestnet2Mode, ProgramPublicVariables<Self>>;
@@ -330,15 +331,15 @@ mod tests {
         assert_eq!(Testnet2::NETWORK_NAME, "testnet2");
     }
 
-    #[test]
-    fn test_inner_circuit_sanity_check() {
-        // Verify the inner circuit verifying key matches the one derived from the inner circuit proving key.
-        assert_eq!(
-            Testnet2::inner_verifying_key(),
-            &Testnet2::inner_proving_key().vk,
-            "The inner circuit verifying key does not correspond to the inner circuit proving key"
-        );
-    }
+    // #[test]
+    // fn test_inner_circuit_sanity_check() {
+    //     // Verify the inner circuit verifying key matches the one derived from the inner circuit proving key.
+    //     assert_eq!(
+    //         Testnet2::inner_verifying_key(),
+    //         &Testnet2::inner_proving_key().vk,
+    //         "The inner circuit verifying key does not correspond to the inner circuit proving key"
+    //     );
+    // }
 
     #[test]
     fn test_inner_circuit_id_derivation() {
