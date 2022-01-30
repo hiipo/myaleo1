@@ -88,7 +88,7 @@ impl<F: PrimeField, MM: MarlinMode> AHPForR1CS<F, MM> {
         }
     }
 
-    pub(crate) fn polynomial_labels() -> impl Iterator<Item = String> {
+    pub fn polynomial_labels() -> impl Iterator<Item = String> {
         Self::indexer_polynomials()
             .chain(Self::prover_polynomials())
             .map(|s| s.to_string())
