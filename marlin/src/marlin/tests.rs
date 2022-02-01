@@ -74,10 +74,11 @@ mod marlin {
     };
     use snarkvm_curves::bls12_377::{Bls12_377, Fq, Fr};
     use snarkvm_polycommit::{marlin_pc::MarlinKZG10, sonic_pc::SonicKZG10};
-    use snarkvm_utilities::rand::{test_rng, UniformRand};
+    use snarkvm_utilities::{cfg_into_iter, rand::UniformRand};
 
     use blake2::Blake2s256;
     use core::ops::MulAssign;
+    use rand::thread_rng;
 
     type MultiPC = MarlinKZG10<Bls12_377>;
     type MarlinInst =
@@ -95,12 +96,14 @@ mod marlin {
             struct $test_struct {}
             impl $test_struct {
                 pub(crate) fn test_circuit(num_constraints: usize, num_variables: usize) {
-                    let rng = &mut test_rng();
+                    use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
                     let max_degree = crate::ahp::AHPForR1CS::<Fr, $marlin_mode>::max_degree(100, 25, 300).unwrap();
-                    let universal_srs = $marlin_inst::universal_setup(max_degree, rng).unwrap();
+                    let universal_srs = $marlin_inst::universal_setup(max_degree, &mut thread_rng()).unwrap();
 
-                    for _ in 0..100 {
+                    cfg_into_iter!(0..100).for_each(|_| {
+                        let rng = &mut thread_rng();
+
                         let a = Fr::rand(rng);
                         let b = Fr::rand(rng);
                         let mut c = a;
@@ -120,13 +123,13 @@ mod marlin {
                         println!("Called verifier");
                         println!("\nShould not verify (i.e. verifier messages should print below):");
                         assert!(!$marlin_inst::verify(&index_vk, &[a, a], &proof).unwrap());
-                    }
+                    });
                 }
 
                 pub(crate) fn test_serde_json(num_constraints: usize, num_variables: usize) {
                     use std::str::FromStr;
 
-                    let rng = &mut test_rng();
+                    let rng = &mut thread_rng();
 
                     let max_degree = crate::ahp::AHPForR1CS::<Fr, $marlin_mode>::max_degree(100, 25, 300).unwrap();
                     let universal_srs = $marlin_inst::universal_setup(max_degree, rng).unwrap();
@@ -153,7 +156,7 @@ mod marlin {
                 pub(crate) fn test_bincode(num_constraints: usize, num_variables: usize) {
                     use crate::snarkvm_utilities::{FromBytes, ToBytes};
 
-                    let rng = &mut test_rng();
+                    let rng = &mut thread_rng();
 
                     let max_degree = crate::ahp::AHPForR1CS::<Fr, $marlin_mode>::max_degree(100, 25, 300).unwrap();
                     let universal_srs = $marlin_inst::universal_setup(max_degree, rng).unwrap();
@@ -281,13 +284,11 @@ mod marlin_recursion {
     };
     use snarkvm_curves::bls12_377::{Bls12_377, Fq, Fr};
     use snarkvm_polycommit::sonic_pc::SonicKZG10;
-    use snarkvm_utilities::{
-        rand::{test_rng, UniformRand},
-        FromBytes,
-        ToBytes,
-    };
+    use snarkvm_utilities::{cfg_into_iter, rand::UniformRand, FromBytes, ToBytes};
 
     use core::ops::MulAssign;
+    use rand::thread_rng;
+    use rayon::iter::{IntoParallelIterator, ParallelIterator};
     use std::str::FromStr;
 
     type MultiPC = SonicKZG10<Bls12_377>;
@@ -301,12 +302,12 @@ mod marlin_recursion {
     >;
 
     fn test_circuit(num_constraints: usize, num_variables: usize) {
-        let rng = &mut test_rng();
-
         let max_degree = crate::ahp::AHPForR1CS::<Fr, MarlinRecursiveMode>::max_degree(100, 25, 300).unwrap();
-        let universal_srs = MarlinInst::universal_setup(max_degree, rng).unwrap();
+        let universal_srs = MarlinInst::universal_setup(max_degree, &mut thread_rng()).unwrap();
 
-        for _ in 0..100 {
+        cfg_into_iter!(0..100).for_each(|_| {
+            let rng = &mut thread_rng();
+
             let a = Fr::rand(rng);
             let b = Fr::rand(rng);
             let mut c = a;
@@ -326,11 +327,11 @@ mod marlin_recursion {
             println!("Called verifier");
             println!("\nShould not verify (i.e. verifier messages should print below):");
             assert!(!MarlinInst::verify(&index_vk, &[a, a], &proof).unwrap());
-        }
+        });
     }
 
     fn test_serde_json(num_constraints: usize, num_variables: usize) {
-        let rng = &mut test_rng();
+        let rng = &mut thread_rng();
 
         let max_degree = crate::ahp::AHPForR1CS::<Fr, MarlinRecursiveMode>::max_degree(100, 25, 300).unwrap();
         let universal_srs = MarlinInst::universal_setup(max_degree, rng).unwrap();
@@ -351,7 +352,7 @@ mod marlin_recursion {
     }
 
     fn test_bincode(num_constraints: usize, num_variables: usize) {
-        let rng = &mut test_rng();
+        let rng = &mut thread_rng();
 
         let max_degree = crate::ahp::AHPForR1CS::<Fr, MarlinRecursiveMode>::max_degree(100, 25, 300).unwrap();
         let universal_srs = MarlinInst::universal_setup(max_degree, rng).unwrap();
