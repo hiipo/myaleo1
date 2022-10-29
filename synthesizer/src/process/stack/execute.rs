@@ -76,10 +76,26 @@ impl<N: Network> Stack<N> {
         // Ensure the number of public variables remains the same.
         ensure!(A::num_public() == num_public, "Illegal closure operation: instructions injected public variables");
 
+        use circuit::Inject;
+
         // Load the outputs.
         let outputs = closure.outputs().iter().map(|output| {
-            // Retrieve the circuit output from the register.
-            registers.load_circuit(self, &Operand::Register(output.register().clone()))
+            match output.operand().clone() {
+                // If the operand is a literal, use the literal directly.
+                Operand::Literal(literal) => Ok(circuit::Value::Plaintext(circuit::Plaintext::from(
+                    circuit::Literal::new(circuit::Mode::Constant, literal),
+                ))),
+                // If the operand is a register, retrieve the stack value from the register.
+                Operand::Register(register) => registers.load_circuit(self, &Operand::Register(register)),
+                // If the operand is the program ID, convert the program ID into an address.
+                Operand::ProgramID(program_id) => Ok(circuit::Value::Plaintext(circuit::Plaintext::from(
+                    circuit::Literal::Address(circuit::Address::new(circuit::Mode::Constant, program_id.to_address()?)),
+                ))),
+                // If the operand is the caller, retrieve the caller from the registers.
+                Operand::Caller => Ok(circuit::Value::Plaintext(circuit::Plaintext::from(circuit::Literal::Address(
+                    registers.caller_circuit()?,
+                )))),
+            }
         });
 
         outputs.collect()
@@ -201,11 +217,39 @@ impl<N: Network> Stack<N> {
         }
 
         // Load the outputs.
-        let output_registers = &function.outputs().iter().map(|output| output.register().clone()).collect::<Vec<_>>();
-        let outputs = output_registers
+        let output_operands = &function.outputs().iter().map(|output| output.operand().clone()).collect::<Vec<_>>();
+        let outputs = output_operands
             .iter()
-            .map(|register| registers.load_circuit(self, &Operand::Register(register.clone())))
+            .map(|operand| {
+                match operand.clone() {
+                    // If the operand is a literal, use the literal directly.
+                    Operand::Literal(literal) => Ok(circuit::Value::Plaintext(circuit::Plaintext::from(
+                        circuit::Literal::new(circuit::Mode::Constant, literal),
+                    ))),
+                    // If the operand is a register, retrieve the stack value from the register.
+                    Operand::Register(register) => registers.load_circuit(self, &Operand::Register(register)),
+                    // If the operand is the program ID, convert the program ID into an address.
+                    Operand::ProgramID(program_id) => {
+                        Ok(circuit::Value::Plaintext(circuit::Plaintext::from(circuit::Literal::Address(
+                            circuit::Address::new(circuit::Mode::Constant, program_id.to_address()?),
+                        ))))
+                    }
+                    // If the operand is the caller, retrieve the caller from the registers.
+                    Operand::Caller => Ok(circuit::Value::Plaintext(circuit::Plaintext::from(
+                        circuit::Literal::Address(registers.caller_circuit()?),
+                    ))),
+                }
+            })
             .collect::<Result<Vec<_>>>()?;
+
+        // Map the output operands into registers.
+        let output_registers = output_operands
+            .iter()
+            .map(|operand| match operand {
+                Operand::Register(register) => Some(register.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
         #[cfg(debug_assertions)]
         Self::log_circuit::<A, _>(format!("Function '{}()'", function.name()));
@@ -224,7 +268,7 @@ impl<N: Network> Stack<N> {
             request.tcm(),
             outputs,
             &output_types,
-            output_registers,
+            &output_registers,
         );
 
         #[cfg(debug_assertions)]
@@ -421,7 +465,7 @@ impl<N: Network> Stack<N> {
             let proof = proving_key.prove(function.name(), &assignment, rng)?;
             // Construct the transition.
             let transition =
-                Transition::from(&console_request, &response, finalize, &output_types, output_registers, proof, *fee)?;
+                Transition::from(&console_request, &response, finalize, &output_types, &output_registers, proof, *fee)?;
             // Add the transition to the execution.
             execution.write().push(transition);
         }

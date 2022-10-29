@@ -25,7 +25,7 @@ impl<A: Aleo> Response<A> {
         tcm: &Field<A>,
         outputs: Vec<Value<A>>,
         output_types: &[console::ValueType<A::Network>], // Note: Console type
-        output_registers: &[console::Register<A::Network>], // Note: Console type
+        output_registers: &[Option<console::Register<A::Network>>], // Note: Console type
     ) -> Self {
         // Compute the output IDs.
         let output_ids = outputs
@@ -91,6 +91,12 @@ impl<A: Aleo> Response<A> {
                             Value::Record(record) => record,
                             // Ensure the output is a record.
                             Value::Plaintext(..) => A::halt("Expected a record output, found a plaintext output"),
+                        };
+
+                        // Retrieve the output register.
+                        let output_register = match output_register {
+                            Some(output_register) => output_register,
+                            None => A::halt("Expected a register to be paired with a record output"),
                         };
 
                         // Compute the record commitment.
@@ -191,11 +197,11 @@ mod tests {
 
             // Construct the output registers.
             let output_registers = vec![
-                console::Register::Locator(5),
-                console::Register::Locator(6),
-                console::Register::Locator(7),
-                console::Register::Locator(8),
-                console::Register::Locator(9),
+                Some(console::Register::Locator(5)),
+                Some(console::Register::Locator(6)),
+                Some(console::Register::Locator(7)),
+                Some(console::Register::Locator(8)),
+                Some(console::Register::Locator(9)),
             ];
 
             // Construct a program ID.
